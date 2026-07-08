@@ -1,0 +1,29 @@
+{
+  "summary": "Frontend-only verification of the 401 unhandled promise rejection bug fix on the AeroPulse AQI app. All 6 scenarios from the review request passed. No unhandled promise rejections, no React error overlays, no red '401 AxiosError ... Promise.all (index 0)' banners observed. Global axios interceptor and try/catch on page-level useEffects both behave correctly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard chart (recent predictions)", "issues": ["Recharts logs a benign warning 'The width(-1) and height(-1) of chart should be greater than 0' when the chart mounts before its container has measured. Non-blocking, but consider setting minWidth/minHeight or delaying render."]}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_3.json"],
+  "action_items": [
+    "Optional: on session-expiry redirect (cookie cleared + full page reload), the URL does not include ?next=/dashboard because the AuthContext-driven ProtectedRoute redirects before the axios interceptor fires. If you want the next-param behavior to work in that path too, have ProtectedRoute append ?next=<pathname> when redirecting unauthenticated users. Not related to the reported bug.",
+    "Optional: silence Recharts width(-1)/height(-1) warning by ensuring ResponsiveContainer parent has explicit min height on first paint."
+  ],
+  "critical_code_review_comments": [
+    "api.js interceptor correctly excludes /auth/* endpoints and guards against redirect loop when already on /login. Good.",
+    "Dashboard/Reports/Upload/Train/Predict useEffects now have try/catch/finally — no more unhandled promise rejections from Promise.all.",
+    "Consider centralising the 'load initial data' pattern into a small hook to avoid try/catch boilerplate duplication across pages (DRY)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (per request)", "frontend": "100%"},
+  "test_credentials": "admin@aqi.io / admin123 (seeded). Also created a fresh user via /register during Test 6.",
+  "seed_data_creation": "One throwaway user via UI register form (email test_user_<epoch>@example.com).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bug fix for 401 unhandled promise rejection verified. Tests performed: (1) logged-out /dashboard -> redirect to /login (no error thrown); (2) admin login -> dashboard loads with stat cards; (3) sidebar nav across /upload /train /predict /reports /dashboard clean; (4) session expiry simulated by context.clear_cookies() + reload -> redirected to /login with no unhandled 401 pageerror; (5) 0 pageerrors, 0 'Uncaught' / 'unhandled' console errors across the entire suite (only 'Failed to load resource: 401' network log lines, which are expected and not React error overlays); (6) fresh /register + auto-login -> dashboard clean.",
+  "rca of the issue": "Original RCA (confirmed by user context): Dashboard.jsx (and 4 other pages) had `try { await Promise.all([...]) } finally { setLoading(false) }` with no catch. When the JWT cookie expired, the 401 rejection from api.get bubbled to React as an unhandled promise rejection, showing the red bundle.js:4551 overlay. Fix applied by main agent: (a) global axios response interceptor in /app/frontend/src/lib/api.js redirects to /login?next=... on any 401 outside /auth/*, (b) all 5 page-level useEffects now catch and swallow errors letting the interceptor handle navigation. Verified working."
+}

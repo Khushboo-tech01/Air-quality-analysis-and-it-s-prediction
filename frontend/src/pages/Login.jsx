@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ export default function Login() {
   const { login } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
 
   const submit = async (e) => {
     e.preventDefault();
@@ -24,7 +25,8 @@ export default function Login() {
     setLoading(false);
     if (res.ok) {
       toast.success("Welcome back!");
-      const to = location.state?.from?.pathname || "/dashboard";
+      const nextParam = searchParams.get("next");
+      const to = nextParam || location.state?.from?.pathname || "/dashboard";
       nav(to, { replace: true });
     } else {
       toast.error(res.error);

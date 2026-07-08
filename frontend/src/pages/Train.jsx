@@ -30,7 +30,8 @@ export default function Train() {
         const pre = params.get("dataset");
         if (pre && data.some((d) => d.id === pre)) setDatasetId(pre);
         else if (data.length) setDatasetId(data[0].id);
-      } finally { setLoading(false); }
+      } catch { /* silent */ }
+      finally { setLoading(false); }
     })();
   }, [params]);
 

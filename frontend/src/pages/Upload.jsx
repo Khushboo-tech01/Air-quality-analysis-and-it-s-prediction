@@ -20,7 +20,8 @@ export default function Upload() {
     try {
       const { data } = await api.get("/datasets");
       setDatasets(data);
-    } finally { setLoading(false); }
+    } catch { /* silent */ }
+    finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);

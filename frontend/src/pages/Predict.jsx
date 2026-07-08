@@ -26,12 +26,14 @@ export default function Predict() {
 
   useEffect(() => {
     (async () => {
-      const { data } = await api.get("/datasets");
-      const trained = data.filter((d) => d.trained);
-      setDatasets(trained);
-      const pre = params.get("dataset");
-      if (pre && trained.some((d) => d.id === pre)) setDatasetId(pre);
-      else if (trained.length) setDatasetId(trained[0].id);
+      try {
+        const { data } = await api.get("/datasets");
+        const trained = data.filter((d) => d.trained);
+        setDatasets(trained);
+        const pre = params.get("dataset");
+        if (pre && trained.some((d) => d.id === pre)) setDatasetId(pre);
+        else if (trained.length) setDatasetId(trained[0].id);
+      } catch { /* silent */ }
     })();
   }, [params]);
 

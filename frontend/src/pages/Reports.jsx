@@ -10,9 +10,11 @@ export default function Reports() {
 
   useEffect(() => {
     (async () => {
-      const [ds, hs] = await Promise.all([api.get("/datasets"), api.get("/history")]);
-      setDatasets(ds.data);
-      setPreds(hs.data);
+      try {
+        const [ds, hs] = await Promise.all([api.get("/datasets"), api.get("/history")]);
+        setDatasets(ds.data);
+        setPreds(hs.data);
+      } catch { /* silent — 401 handled globally */ }
     })();
   }, []);
 

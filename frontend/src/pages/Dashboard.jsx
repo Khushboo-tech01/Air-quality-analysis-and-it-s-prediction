@@ -21,7 +21,8 @@ export default function Dashboard() {
         const [ds, hs] = await Promise.all([api.get("/datasets"), api.get("/history")]);
         setDatasets(ds.data);
         setPreds(hs.data);
-      } finally { setLoading(false); }
+      } catch { /* handled by global 401 interceptor / silent */ }
+      finally { setLoading(false); }
     })();
   }, []);
 
