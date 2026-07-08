@@ -87,6 +87,10 @@ def _serialize(doc: dict) -> dict:
     doc = dict(doc)
     if "_id" in doc:
         doc["id"] = str(doc.pop("_id"))
+    # Convert any remaining ObjectId fields to strings
+    for k, v in list(doc.items()):
+        if isinstance(v, ObjectId):
+            doc[k] = str(v)
     doc.pop("password_hash", None)
     return doc
 
@@ -137,8 +141,7 @@ async def register(payload: RegisterIn, response: Response):
 @api.post("/auth/login")
 async def login(payload: LoginIn, request: Request, response: Response):
     email = payload.email.lower()
-    ip = request.client.host if request.client else "unknown"
-    identifier = f"{ip}:{email}"
+    identifier = email  # key by email only — ingress uses multiple pod IPs
 
     # brute force check
     attempts = await db.login_attempts.find_one({"identifier": identifier})
