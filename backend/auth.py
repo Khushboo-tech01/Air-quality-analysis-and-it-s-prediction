@@ -111,3 +111,14 @@ async def seed_admin(db) -> None:
             {"_id": existing["_id"]},
             {"$set": {"password_hash": hash_password(admin_password), "role": "admin"}}
         )
+
+    # Seed a shared "guest" user so the frontend can auto-login without an auth screen.
+    guest_email = "guest@aqi.io"
+    if await db.users.find_one({"email": guest_email}) is None:
+        await db.users.insert_one({
+            "email": guest_email,
+            "password_hash": hash_password("guest-auto-login"),
+            "name": "Guest",
+            "role": "user",
+            "created_at": now,
+        })

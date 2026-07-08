@@ -171,6 +171,17 @@ async def logout(response: Response):
     return {"ok": True}
 
 
+@api.post("/auth/guest")
+async def guest_login(response: Response):
+    """Auto-login as the shared guest user — enables the no-login-page UX."""
+    user = await db.users.find_one({"email": "guest@aqi.io"})
+    if not user:
+        raise HTTPException(status_code=500, detail="Guest account is not seeded")
+    uid = str(user["_id"])
+    set_auth_cookies(response, create_access_token(uid, user["email"]), create_refresh_token(uid))
+    return _serialize(user)
+
+
 @api.get("/auth/me")
 async def me(user=Depends(get_current_user)):
     return user

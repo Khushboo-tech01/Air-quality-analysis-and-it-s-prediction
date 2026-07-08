@@ -1,14 +1,9 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { AuthProvider } from "@/context/AuthContext";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { ThemeProvider } from "@/context/ThemeContext";
-import { ProtectedRoute } from "@/components/ProtectedRoute";
 import AppLayout from "@/components/AppLayout";
 import { Toaster } from "sonner";
 
-import Landing       from "@/pages/Landing";
-import Login         from "@/pages/Login";
-import Register      from "@/pages/Register";
-import Forgot        from "@/pages/Forgot";
 import Dashboard     from "@/pages/Dashboard";
 import Upload        from "@/pages/Upload";
 import DatasetDetail from "@/pages/DatasetDetail";
@@ -17,31 +12,41 @@ import Predict       from "@/pages/Predict";
 import Reports       from "@/pages/Reports";
 import Admin         from "@/pages/Admin";
 
+function BootGate({ children }) {
+  const { loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+          <p className="text-sm text-muted-foreground">Loading workspace…</p>
+        </div>
+      </div>
+    );
+  }
+  return children;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
         <BrowserRouter>
-          <Routes>
-            <Route path="/"          element={<Landing />} />
-            <Route path="/login"     element={<Login />} />
-            <Route path="/register"  element={<Register />} />
-            <Route path="/forgot"    element={<Forgot />} />
-
-            <Route element={
-              <ProtectedRoute>
-                <AppLayout />
-              </ProtectedRoute>
-            }>
-              <Route path="/dashboard"         element={<Dashboard />} />
-              <Route path="/upload"            element={<Upload />} />
-              <Route path="/dataset/:id"       element={<DatasetDetail />} />
-              <Route path="/train"             element={<Train />} />
-              <Route path="/predict"           element={<Predict />} />
-              <Route path="/reports"           element={<Reports />} />
-              <Route path="/admin"             element={<ProtectedRoute adminOnly><Admin /></ProtectedRoute>} />
-            </Route>
-          </Routes>
+          <BootGate>
+            <Routes>
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route element={<AppLayout />}>
+                <Route path="/dashboard"    element={<Dashboard />} />
+                <Route path="/upload"       element={<Upload />} />
+                <Route path="/dataset/:id"  element={<DatasetDetail />} />
+                <Route path="/train"        element={<Train />} />
+                <Route path="/predict"      element={<Predict />} />
+                <Route path="/reports"      element={<Reports />} />
+                <Route path="/admin"        element={<Admin />} />
+              </Route>
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Routes>
+          </BootGate>
         </BrowserRouter>
         <Toaster position="top-right" richColors />
       </AuthProvider>

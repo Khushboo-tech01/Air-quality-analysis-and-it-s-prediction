@@ -1,12 +1,11 @@
-import { Link, NavLink, useNavigate, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
-  ChartLine, House, UploadSimple, Brain, Compass, FileText, Users, Wind,
-  Sun, Moon, SignOut, ChartPieSlice,
+  House, UploadSimple, Brain, Compass, FileText, Wind,
+  Sun, Moon,
 } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
-import { Toaster } from "sonner";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard",   icon: House,        testid: "nav-dashboard" },
@@ -17,11 +16,8 @@ const NAV = [
 ];
 
 export default function AppLayout() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const { theme, toggle } = useTheme();
-  const nav = useNavigate();
-
-  const onLogout = async () => { await logout(); nav("/"); };
 
   return (
     <div className="min-h-screen flex bg-background text-foreground">
@@ -49,44 +45,25 @@ export default function AppLayout() {
               {n.label}
             </NavLink>
           ))}
-          {user?.role === "admin" && (
-            <NavLink
-              to="/admin"
-              data-testid="nav-admin"
-              className={({ isActive }) =>
-                `flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
-                  isActive ? "bg-primary/10 text-primary font-semibold" : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                }`
-              }
-            >
-              <ChartPieSlice size={18} />
-              Admin
-            </NavLink>
-          )}
         </nav>
         <div className="border-t border-border p-3 space-y-2">
           <div className="flex items-center gap-2 rounded-md px-2 py-2">
             <div className="h-8 w-8 rounded-full bg-secondary flex items-center justify-center font-semibold text-sm">
-              {user?.name?.[0]?.toUpperCase() || "U"}
+              {user?.name?.[0]?.toUpperCase() || "A"}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium" data-testid="user-name">{user?.name || "User"}</p>
-              <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
+              <p className="truncate text-sm font-medium" data-testid="user-name">{user?.name || "AeroPulse"}</p>
+              <p className="truncate text-xs text-muted-foreground">Workspace</p>
             </div>
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline" size="sm" className="flex-1"
-              data-testid="theme-toggle"
-              onClick={toggle}
-            >
-              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-              <span className="ml-1.5">{theme === "dark" ? "Light" : "Dark"}</span>
-            </Button>
-            <Button variant="ghost" size="sm" onClick={onLogout} data-testid="logout-btn" className="text-muted-foreground">
-              <SignOut size={16} />
-            </Button>
-          </div>
+          <Button
+            variant="outline" size="sm" className="w-full"
+            data-testid="theme-toggle"
+            onClick={toggle}
+          >
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            <span className="ml-1.5">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+          </Button>
         </div>
       </aside>
 
@@ -100,19 +77,15 @@ export default function AppLayout() {
             </div>
             <span className="font-display text-base font-bold">AeroPulse</span>
           </Link>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={toggle} data-testid="theme-toggle-mobile">
-              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={onLogout}><SignOut size={16} /></Button>
-          </div>
+          <Button variant="ghost" size="sm" onClick={toggle} data-testid="theme-toggle-mobile">
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </Button>
         </div>
 
         <div className="flex-1 overflow-y-auto">
           <Outlet />
         </div>
       </main>
-      <Toaster position="top-right" richColors />
     </div>
   );
 }

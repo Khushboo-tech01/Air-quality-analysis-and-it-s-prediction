@@ -8,20 +8,24 @@ const api = axios.create({
   withCredentials: true,
 });
 
-// Global 401 handler: if any request comes back unauthorized (except /auth/*),
-// clear the client-side session and bounce to /login. This prevents unhandled
-// promise rejections from cascading through the UI when a JWT cookie expires.
+// On 401 from any non-/auth endpoint, silently re-authenticate as guest and retry.
+// This keeps the app usable without ever showing a login screen.
+let guestPromise = null;
 api.interceptors.response.use(
   (r) => r,
-  (err) => {
+  async (err) => {
     const status = err?.response?.status;
-    const url = err?.config?.url || "";
-    if (status === 401 && !url.startsWith("/auth/")) {
-      if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
-        // Preserve intended destination so the user can be sent back after login
-        const next = encodeURIComponent(window.location.pathname + window.location.search);
-        window.location.replace(`/login?next=${next}`);
-      }
+    const cfg = err?.config || {};
+    const url = cfg.url || "";
+    if (status === 401 && !url.startsWith("/auth/") && !cfg.__retried) {
+      cfg.__retried = true;
+      try {
+        if (!guestPromise) {
+          guestPromise = api.post("/auth/guest").finally(() => { guestPromise = null; });
+        }
+        await guestPromise;
+        return api.request(cfg);
+      } catch { /* fall through to reject */ }
     }
     return Promise.reject(err);
   }
