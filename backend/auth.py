@@ -9,7 +9,9 @@ from fastapi import HTTPException, Request
 JWT_ALGORITHM = "HS256"
 ACCESS_TTL_MIN = 60 * 12  # 12 hours
 REFRESH_TTL_DAYS = 7
-COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() == "true"
+# Default cookies to Secure on production HTTPS. Override to "false" for local http dev.
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() == "true"
+COOKIE_SAMESITE = os.environ.get("COOKIE_SAMESITE", "lax").lower()
 
 
 def _secret() -> str:
@@ -39,9 +41,9 @@ def create_refresh_token(user_id: str) -> str:
 
 def set_auth_cookies(response, access: str, refresh: str) -> None:
     response.set_cookie("access_token", access, httponly=True, secure=COOKIE_SECURE,
-                        samesite="lax", max_age=ACCESS_TTL_MIN * 60, path="/")
+                        samesite=COOKIE_SAMESITE, max_age=ACCESS_TTL_MIN * 60, path="/")
     response.set_cookie("refresh_token", refresh, httponly=True, secure=COOKIE_SECURE,
-                        samesite="lax", max_age=REFRESH_TTL_DAYS * 86400, path="/")
+                        samesite=COOKIE_SAMESITE, max_age=REFRESH_TTL_DAYS * 86400, path="/")
 
 
 def clear_auth_cookies(response) -> None:
