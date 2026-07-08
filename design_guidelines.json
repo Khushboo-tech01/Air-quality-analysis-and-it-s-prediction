@@ -1,0 +1,112 @@
+{
+  "theme": "dark_mode_default_with_light_toggle",
+  "archetype": "Swiss & High-Contrast mixed with The 'Technical' Look (Linear.app / Vercel / Stripe inspired)",
+  "typography": {
+    "headings": {
+      "fontFamily": "Cabinet Grotesk, sans-serif",
+      "weights": ["500", "700", "900"],
+      "tracking": "tracking-tight",
+      "instruction": "CRITICAL: Do NOT use Inter for headings. Use Cabinet Grotesk for a crisp, premium SaaS aesthetic. Apply tracking-tight to all headings > 32px."
+    },
+    "body": {
+      "fontFamily": "Inter, sans-serif",
+      "weights": ["400", "500"],
+      "instruction": "Use Inter or SF Pro equivalent for high legibility in body paragraphs and dense data tables."
+    },
+    "data_metrics": {
+      "fontFamily": "JetBrains Mono, monospace",
+      "weights": ["400", "600"],
+      "instruction": "Use JetBrains Mono for all KPIs, AQI numbers, table data, and predictions to create a technical 'Data Science' feel."
+    }
+  },
+  "colors": {
+    "primary": "#2563EB",
+    "secondary": "#06B6D4",
+    "success": "#10B981",
+    "danger": "#EF4444",
+    "warning": "#F59E0B",
+    "background_light": "#F8FAFC",
+    "background_dark": "#0A0A0A",
+    "surface_dark": "#111111",
+    "border_dark": "rgba(255, 255, 255, 0.1)",
+    "instruction": "Follow Linear app style: Deep OLED blacks (#0A0A0A) for background. Soft whites (#F8FAFC) for light mode. Use primary blue sparingly for primary CTAs only. Success/Danger/Warning for AQI status."
+  },
+  "visual_enhancers": {
+    "glassmorphism": "Use on sticky headers and floating navs: backdrop-blur-xl bg-black/60 (dark) or bg-white/70 (light) with 1px delicate inner border.",
+    "grid_borders": "For the analytics dashboard, expose the skeleton. Use border-collapse style with subtle borders (border-border/40) on right/bottom of grid items.",
+    "shadows": "Deep ambient shadows in light mode. Minimal shadows but sharp 1px borders in dark mode.",
+    "vercel_grid": "Add a subtle CSS grid background (linear-gradient lines with 10% opacity) in the Hero section."
+  },
+  "components": {
+    "cards": "Minimalist, sharp or max 8px border-radius (rounded-md). Avoid heavy drop shadows in dark mode; rely on subtle 1px borders.",
+    "buttons": "Pill-shaped or slightly rounded (rounded-md). Smooth hover states with translation and glow.",
+    "inputs": "Shadcn UI standard, minimal borders, clear focus rings.",
+    "tables": "Zebra striping on dense tables, right-aligned numbers, sticky headers."
+  },
+  "grids_and_layouts": {
+    "dashboard": "High Density Grid (Bento style). Base: grid-cols-1 md:grid-cols-3 lg:grid-cols-4. Tight gaps (gap-4 or gap-6). Use col-span-2 for charts, col-span-1 for summary widgets.",
+    "marketing": "The 'Tetris' Grid for landing page features. Wide gaps (gap-8). Asymmetrical."
+  },
+  "motion": {
+    "hover": "Subtle -translate-y-1 on cards, text color brightens.",
+    "page_load": "Staggered entrance animations for dashboard widgets using Framer Motion.",
+    "charts": "Smooth drawing animations for line charts."
+  },
+  "accessibility": {
+    "contrast": "Ensure all text meets WCAG AA 4.5:1. Never use gray-on-gray for essential metrics.",
+    "data_testids": "All interactive elements MUST have data-testid attributes (e.g., data-testid='upload-csv-button').",
+    "reduced_motion": "Respect prefers-reduced-motion."
+  },
+  "media_and_icons": {
+    "icon_library": "@phosphor-icons/react (Duotone weight for marketing, Regular for dashboard).",
+    "image_urls": {
+      "landing_hero": {
+        "url": "https://images.pexels.com/photos/13356964/pexels-photo-13356964.jpeg",
+        "description": "Clean modern city skyline reflecting clear air quality."
+      },
+      "landing_feature_1": {
+        "url": "https://images.pexels.com/photos/28832655/pexels-photo-28832655.jpeg",
+        "description": "Contemporary skyscraper architecture against blue sky."
+      },
+      "dashboard_abstract": {
+        "url": "https://images.pexels.com/photos/97080/pexels-photo-97080.jpeg",
+        "description": "Abstract data visualization and analytics."
+      },
+      "user_avatar": {
+        "url": "https://images.unsplash.com/photo-1592371310894-1d1a8c963664",
+        "description": "Professional user avatar."
+      },
+      "sponsor_logos": [
+        "https://images.pexels.com/photos/26576975/pexels-photo-26576975.jpeg",
+        "https://images.pexels.com/photos/9973170/pexels-photo-9973170.jpeg"
+      ]
+    }
+  },
+  "libraries": {
+    "charts": "recharts (for 2D standard charts) and Leaflet/react-leaflet (for AQI maps).",
+    "motion": "framer-motion",
+    "notifications": "sonner",
+    "forms": "react-hook-form + zod"
+  },
+  "instructions_to_main_agent": [
+    "Install required dependencies: yarn add @phosphor-icons/react framer-motion recharts leaflet react-leaflet sonner react-hook-form zod",
+    "Update tailwind.config.js to include Cabinet Grotesk, Inter, and JetBrains Mono.",
+    "Implement a dark/light mode toggle in the header.",
+    "Build the dashboard using the 'Grid Borders' structural look (visible 1px borders between panels).",
+    "Ensure the AQI gauges use the defined semantic colors (Good=Success, Unhealthy=Danger).",
+    "For the Landing Page, use pure HTML/Tailwind with asymmetrical Bento Grids. Do not use generic Shadcn Cards for marketing sections."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. Make creative, distinctive frontends.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) for sticky headers.",
+    "You MUST NOT apply universal transition (e.g., transition: all). Add transitions for specific properties.",
+    "You MUST NOT center align the app container (.App { text-align: center; }).",
+    "Always use modern button styles with interaction animations & context-relevant color.",
+    "NEVER use AI assistant Emoji characters (🤖🧠💡) for icons. Use Phosphor Icons.",
+    "Every interaction needs micro-animations - hover states, transitions.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "DO NOT use completely transparent backgrounds under content (dropdowns, navs)."
+  ]
+}
