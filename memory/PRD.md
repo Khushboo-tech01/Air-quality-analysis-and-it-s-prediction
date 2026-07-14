@@ -7,7 +7,7 @@ Build a complete production-ready web application called "Air Quality Analysis &
 - **Backend**: FastAPI + MongoDB (Motor) + scikit-learn + XGBoost + reportlab
 - **Frontend**: React 19 (CRA) + TailwindCSS + Shadcn UI + Recharts + Framer Motion + Phosphor Icons + React-Dropzone + Leaflet
 - **Auth**: JWT httpOnly cookies + bcrypt + brute-force lockout + admin seeding
-- **AI Insights**: Claude Sonnet 4.5 via Emergent Universal Key (emergentintegrations)
+- **Dataset Insights**: Built-in local summaries with no external service dependency
 
 ## User Personas
 1. **Data Science Student / Intern** — Uploads AQI CSV, needs EDA + model comparison + PDF report for submission

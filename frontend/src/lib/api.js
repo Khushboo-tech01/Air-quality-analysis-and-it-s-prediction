@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
 export const API_BASE = `${BACKEND_URL}/api`;
 
 const api = axios.create({
@@ -8,9 +8,6 @@ const api = axios.create({
   withCredentials: true,
 });
 
-// On 401 from any non-/auth endpoint, silently re-authenticate as guest and retry.
-// This keeps the app usable without ever showing a login screen.
-let guestPromise = null;
 api.interceptors.response.use(
   (r) => r,
   async (err) => {
@@ -20,10 +17,7 @@ api.interceptors.response.use(
     if (status === 401 && !url.startsWith("/auth/") && !cfg.__retried) {
       cfg.__retried = true;
       try {
-        if (!guestPromise) {
-          guestPromise = api.post("/auth/guest").finally(() => { guestPromise = null; });
-        }
-        await guestPromise;
+        await api.post("/auth/refresh");
         return api.request(cfg);
       } catch { /* fall through to reject */ }
     }

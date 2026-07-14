@@ -27,6 +27,9 @@ export default function Dashboard() {
   }, []);
 
   const trainedCount = datasets.filter((d) => d.trained).length;
+  const today = new Date().toISOString().slice(0, 10);
+  const todaysPredictions = predictions.filter((p) => (p.date || p.created_at || "").slice(0, 10) === today).length;
+  const bestAccuracy = datasets.reduce((best, d) => Math.max(best, ...(d.model_results || []).map((m) => Number(m.r2 || m.accuracy || 0) * (Number(m.r2 || m.accuracy || 0) <= 1 ? 100 : 1))), 0);
   const chartData = [...predictions].reverse().map((p, i) => ({
     idx: i + 1,
     aqi: p.aqi,

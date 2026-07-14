@@ -37,9 +37,9 @@ from sample_data import generate_sample_csv
 # ────────────────────────────────────────────────────────────────────────────
 # MongoDB
 # ────────────────────────────────────────────────────────────────────────────
-mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ["DB_NAME"]]
+mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)
+db = client[os.environ.get("DB_NAME", "aeropulse")]
 
 UPLOAD_DIR = ROOT_DIR / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -115,6 +115,12 @@ class ForgotIn(BaseModel):
 
 class ResetIn(BaseModel):
     token: str
+    password: str = Field(min_length=6)
+
+class ProfileIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+class PasswordIn(BaseModel):
     password: str = Field(min_length=6)
 
 
@@ -233,6 +239,29 @@ async def reset(payload: ResetIn):
         raise HTTPException(status_code=400, detail="Reset token has expired")
     await db.users.update_one({"_id": doc["user_id"]}, {"$set": {"password_hash": hash_password(payload.password)}})
     await db.password_reset_tokens.update_one({"_id": doc["_id"]}, {"$set": {"used": True}})
+    return {"ok": True}
+
+@api.patch("/auth/profile")
+async def update_profile(payload: ProfileIn, user=Depends(get_current_user)):
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"name": payload.name.strip()}})
+    return {**user, "name": payload.name.strip()}
+
+@api.post("/auth/change-password")
+async def change_password(payload: PasswordIn, user=Depends(get_current_user)):
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"password_hash": hash_password(payload.password)}})
+    return {"ok": True}
+
+@api.delete("/auth/account")
+async def delete_account(response: Response, user=Depends(get_current_user)):
+    uid = ObjectId(user["id"])
+    cursor = db.datasets.find({"user_id": uid})
+    async for dataset in cursor:
+        try: Path(dataset.get("path", "")).unlink(missing_ok=True)
+        except OSError: pass
+    await db.datasets.delete_many({"user_id": uid})
+    await db.predictions.delete_many({"user_id": uid})
+    await db.users.delete_one({"_id": uid})
+    clear_auth_cookies(response)
     return {"ok": True}
 
 
@@ -464,6 +493,7 @@ async def predict(payload: PredictIn, user=Depends(get_current_user)):
         "color": aqi_info["color"],
         "advice": aqi_info["advice"],
         "model": pred["model"],
+        "confidence": round(max(0.0, min(100.0, 100.0 - float(pred.get("rmse", 0)))), 1),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await db.predictions.insert_one(doc)
@@ -480,6 +510,13 @@ async def history(user=Depends(get_current_user)):
         p.pop("user_id", None)
         items.append(p)
     return items
+
+@api.delete("/history/{prediction_id}")
+async def delete_prediction(prediction_id: str, user=Depends(get_current_user)):
+    result = await db.predictions.delete_one({"_id": _oid(prediction_id), "user_id": ObjectId(user["id"])})
+    if not result.deleted_count:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+    return {"ok": True}
 
 
 @api.post("/forecast/{dataset_id}")
@@ -731,3 +768,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server:app", host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8000")), reload=False)

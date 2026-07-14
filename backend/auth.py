@@ -15,7 +15,7 @@ COOKIE_SAMESITE = os.environ.get("COOKIE_SAMESITE", "lax").lower()
 
 
 def _secret() -> str:
-    return os.environ["JWT_SECRET"]
+    return os.environ.get("JWT_SECRET", "aeropulse-development-secret-change-before-production")
 
 
 def hash_password(pw: str) -> str:

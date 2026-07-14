@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { ThemeProvider } from "@/context/ThemeContext";
 import AppLayout from "@/components/AppLayout";
+import ProtectedRoute from "@/components/ProtectedRoute";
 import { Toaster } from "sonner";
 
 import Dashboard     from "@/pages/Dashboard";
@@ -11,6 +12,12 @@ import Train         from "@/pages/Train";
 import Predict       from "@/pages/Predict";
 import Reports       from "@/pages/Reports";
 import Admin         from "@/pages/Admin";
+import Login from "@/pages/Login";
+import Register from "@/pages/Register";
+import Forgot from "@/pages/Forgot";
+import Reset from "@/pages/Reset";
+import Account from "@/pages/Account";
+import Legal from "@/pages/Legal";
 
 function BootGate({ children }) {
   const { loading } = useAuth();
@@ -35,6 +42,16 @@ export default function App() {
           <BootGate>
             <Routes>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/register" element={<Register />} />
+              <Route path="/forgot" element={<Forgot />} />
+              <Route path="/reset-password" element={<Reset />} />
+              <Route path="/about" element={<Legal page="about" />} />
+              <Route path="/contact" element={<Legal page="contact" />} />
+              <Route path="/faq" element={<Legal page="faq" />} />
+              <Route path="/privacy" element={<Legal page="privacy" />} />
+              <Route path="/terms" element={<Legal page="terms" />} />
+              <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
                 <Route path="/dashboard"    element={<Dashboard />} />
                 <Route path="/upload"       element={<Upload />} />
@@ -43,6 +60,8 @@ export default function App() {
                 <Route path="/predict"      element={<Predict />} />
                 <Route path="/reports"      element={<Reports />} />
                 <Route path="/admin"        element={<Admin />} />
+                <Route path="/account"      element={<Account />} />
+              </Route>
               </Route>
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>

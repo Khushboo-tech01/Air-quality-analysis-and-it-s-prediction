@@ -1,110 +1,18 @@
-import { useEffect, useState } from "react";
-import api from "@/lib/api";
+import { useEffect, useMemo, useState } from "react";
+import api, { API_BASE, unwrapError } from "@/lib/api";
 import { PageHeader, PageBody } from "@/components/Page";
 import { AQIBadge } from "@/components/AQIBadge";
-import { FileText, FilePdf, FileCsv } from "@phosphor-icons/react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { FileText, FilePdf, FileCsv, Trash, Eye, ShareNetwork, Printer } from "@phosphor-icons/react";
+import { toast } from "sonner";
 
 export default function Reports() {
-  const [datasets, setDatasets]     = useState([]);
-  const [predictions, setPreds]     = useState([]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const [ds, hs] = await Promise.all([api.get("/datasets"), api.get("/history")]);
-        setDatasets(ds.data);
-        setPreds(hs.data);
-      } catch { /* silent — 401 handled globally */ }
-    })();
-  }, []);
-
-  return (
-    <>
-      <PageHeader
-        title="Reports"
-        subtitle="Download PDF and CSV exports for your predictions, trained models, and raw datasets."
-      />
-      <PageBody className="space-y-6">
-        <section>
-          <h3 className="font-display text-lg font-semibold mb-3">Prediction reports</h3>
-          {predictions.length === 0 ? (
-            <div className="aq-card p-8 text-sm text-muted-foreground text-center">No predictions yet.</div>
-          ) : (
-            <div className="aq-card overflow-hidden">
-              <table className="min-w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    {["Date","Location","Dataset","AQI","Category","PDF"].map((h) => (
-                      <th key={h} className="text-left px-4 py-3 font-semibold text-xs uppercase tracking-wider text-muted-foreground">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {predictions.map((p) => (
-                    <tr key={p.id} className="border-t border-border" data-testid={`prediction-row-${p.id}`}>
-                      <td className="px-4 py-3 font-mono text-xs">{p.date || (p.created_at || "").slice(0, 10)}</td>
-                      <td className="px-4 py-3">{p.location || "—"}</td>
-                      <td className="px-4 py-3 text-xs truncate max-w-[220px]">{p.dataset_name}</td>
-                      <td className="px-4 py-3 font-mono font-semibold" style={{ color: p.color }}>{Math.round(p.aqi)}</td>
-                      <td className="px-4 py-3"><AQIBadge aqi={p.aqi} /></td>
-                      <td className="px-4 py-3">
-                        <a
-                          href={`${process.env.REACT_APP_BACKEND_URL}/api/reports/prediction/${p.id}`}
-                          target="_blank" rel="noreferrer"
-                          className="text-primary hover:underline text-xs inline-flex items-center gap-1"
-                          data-testid={`download-pred-${p.id}`}
-                        >
-                          <FilePdf size={14} /> PDF
-                        </a>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        <section>
-          <h3 className="font-display text-lg font-semibold mb-3">Dataset & model reports</h3>
-          {datasets.length === 0 ? (
-            <div className="aq-card p-8 text-sm text-muted-foreground text-center">No datasets yet.</div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {datasets.map((d) => (
-                <div key={d.id} className="aq-card p-5" data-testid={`report-card-${d.id}`}>
-                  <div className="flex items-center gap-2">
-                    <FileText size={16} className="text-muted-foreground" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium">{d.name}</div>
-                      <div className="text-xs text-muted-foreground font-mono">{d.rows} rows · {d.trained ? d.best_model : "not trained"}</div>
-                    </div>
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <a
-                      href={`${process.env.REACT_APP_BACKEND_URL}/api/reports/dataset/${d.id}/csv`}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-accent"
-                      data-testid={`download-csv-${d.id}`}
-                    >
-                      <FileCsv size={14} /> Raw CSV
-                    </a>
-                    {d.trained && (
-                      <a
-                        href={`${process.env.REACT_APP_BACKEND_URL}/api/reports/model/${d.id}`}
-                        target="_blank" rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-accent"
-                        data-testid={`download-model-pdf-${d.id}`}
-                      >
-                        <FilePdf size={14} /> Model metrics PDF
-                      </a>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </PageBody>
-    </>
-  );
+  const [datasets, setDatasets] = useState([]), [predictions, setPreds] = useState([]), [query, setQuery] = useState(""), [sort, setSort] = useState("newest"), [selected, setSelected] = useState(null);
+  const load = async () => { try { const [ds, hs] = await Promise.all([api.get("/datasets"), api.get("/history")]); setDatasets(ds.data); setPreds(hs.data); } catch (e) { toast.error(unwrapError(e)); } };
+  useEffect(() => { load(); }, []);
+  const rows = useMemo(() => predictions.filter(p => `${p.location||""} ${p.dataset_name||""} ${p.category||""}`.toLowerCase().includes(query.toLowerCase())).sort((a,b) => sort === "aqi" ? b.aqi-a.aqi : sort === "oldest" ? String(a.created_at).localeCompare(String(b.created_at)) : String(b.created_at).localeCompare(String(a.created_at))), [predictions, query, sort]);
+  const del = async (id) => { if (!window.confirm("Delete this prediction report?")) return; try { await api.delete(`/history/${id}`); setPreds(v => v.filter(p => p.id !== id)); toast.success("Report deleted."); } catch(e) { toast.error(unwrapError(e)); } };
+  const share = async (p) => { const url = `${API_BASE}/reports/prediction/${p.id}`; try { if (navigator.share) await navigator.share({ title: "AeroPulse AQI report", text: `AQI ${Math.round(p.aqi)} — ${p.category}`, url }); else { await navigator.clipboard.writeText(url); toast.success("Report link copied."); } } catch {} };
+  return <><PageHeader title="Reports" subtitle="Search, review, share, print, and download your prediction reports."/><PageBody className="space-y-6"><section><div className="flex flex-wrap items-center justify-between gap-3 mb-3"><h2 className="font-display text-lg font-semibold">Prediction history</h2><div className="flex gap-2"><Input aria-label="Search reports" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search location or dataset" className="w-52"/><select value={sort} onChange={e=>setSort(e.target.value)} className="rounded-md border border-input bg-background px-3 text-sm"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="aqi">Highest AQI</option></select></div></div>{rows.length === 0 ? <div className="aq-card p-8 text-center text-sm text-muted-foreground">{predictions.length ? "No reports match your search." : "No predictions yet."}</div> : <div className="aq-card overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="bg-muted/50"><tr>{["Date","Location","Dataset","AQI","Category","Actions"].map(h=><th key={h} className="text-left p-3 text-xs uppercase text-muted-foreground">{h}</th>)}</tr></thead><tbody>{rows.map(p=><tr key={p.id} className="border-t border-border"><td className="p-3 font-mono text-xs">{p.date || p.created_at?.slice(0,10)}</td><td className="p-3">{p.location || "—"}</td><td className="p-3 max-w-[200px] truncate">{p.dataset_name}</td><td className="p-3 font-semibold" style={{color:p.color}}>{Math.round(p.aqi)}</td><td className="p-3"><AQIBadge aqi={p.aqi}/></td><td className="p-3 flex gap-1"><Button size="icon" variant="ghost" title="View" onClick={()=>setSelected(p)}><Eye size={16}/></Button><a className="inline-flex h-9 w-9 items-center justify-center" title="Download PDF" href={`${API_BASE}/reports/prediction/${p.id}`} target="_blank" rel="noreferrer"><FilePdf size={17}/></a><Button size="icon" variant="ghost" title="Share" onClick={()=>share(p)}><ShareNetwork size={16}/></Button><Button size="icon" variant="ghost" title="Delete" onClick={()=>del(p.id)}><Trash size={16}/></Button></td></tr>)}</tbody></table></div>}</section><section><h2 className="font-display text-lg font-semibold mb-3">Dataset & model reports</h2><div className="grid md:grid-cols-2 gap-4">{datasets.map(d=><div key={d.id} className="aq-card p-5"><div className="flex gap-2"><FileText size={18}/><div><p className="font-medium">{d.name}</p><p className="text-xs text-muted-foreground">{d.rows} rows · {d.trained ? d.best_model : "Not trained"}</p></div></div><div className="mt-4 flex gap-2"><a href={`${API_BASE}/reports/dataset/${d.id}/csv`} className="text-xs border rounded-md px-3 py-2 inline-flex gap-1"><FileCsv size={14}/>CSV</a>{d.trained&&<a target="_blank" rel="noreferrer" href={`${API_BASE}/reports/model/${d.id}`} className="text-xs border rounded-md px-3 py-2 inline-flex gap-1"><FilePdf size={14}/>Model PDF</a>}</div></div>)}</div></section>{selected&&<div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" onClick={()=>setSelected(null)}><div className="aq-card p-6 max-w-md w-full" onClick={e=>e.stopPropagation()}><h2 className="font-display text-xl font-semibold">Prediction report</h2><p className="mt-4 text-4xl font-bold" style={{color:selected.color}}>{Math.round(selected.aqi)} AQI</p><p className="mt-1">{selected.category}</p><p className="mt-5 text-sm text-muted-foreground">{selected.advice}</p><div className="mt-5 flex gap-2"><Button onClick={()=>window.open(`${API_BASE}/reports/prediction/${selected.id}`,"_blank")}>Download PDF</Button><Button variant="outline" onClick={()=>window.print()}><Printer size={15} className="mr-1"/>Print</Button></div></div></div>}</PageBody></>;
 }

@@ -1,9 +1,9 @@
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
   House, UploadSimple, Brain, Compass, FileText, Wind,
-  Sun, Moon,
+  Sun, Moon, User, SignOut,
 } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 
@@ -18,6 +18,9 @@ const NAV = [
 export default function AppLayout() {
   const { user } = useAuth();
   const { theme, toggle } = useTheme();
+  const navigate = useNavigate();
+  const { logout } = useAuth();
+  const signOut = async () => { await logout(); navigate("/login"); };
 
   return (
     <div className="min-h-screen flex bg-background text-foreground">
@@ -64,6 +67,10 @@ export default function AppLayout() {
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             <span className="ml-1.5">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
           </Button>
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="outline" size="sm" onClick={() => navigate("/account")}><User size={15} className="mr-1" />Profile</Button>
+            <Button variant="outline" size="sm" onClick={signOut}><SignOut size={15} className="mr-1" />Logout</Button>
+          </div>
         </div>
       </aside>
 

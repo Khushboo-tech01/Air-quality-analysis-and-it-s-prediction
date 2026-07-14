@@ -16,7 +16,7 @@ from xgboost import XGBRegressor
 from aqi_utils import detect_schema
 from eda_service import ensure_aqi
 
-MODELS_DIR = Path("/app/backend/models")
+MODELS_DIR = Path(__file__).resolve().parent / "models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Canonical feature keys used at prediction time

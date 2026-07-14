@@ -9,7 +9,7 @@ A production-ready full-stack platform for analysing air quality datasets, compa
 - Train 5 ML regressors (Linear, Decision Tree, Random Forest, Gradient Boosting, XGBoost) with metrics comparison
 - Auto best-model selection, one-click prediction with AQI classification + health advice
 - 7-day AQI forecast, city comparison
-- AI-powered insights via Claude Sonnet 4.5
+- Built-in dataset insights with no external AI service requirement
 - PDF and CSV report exports
 - Admin dashboard (users, datasets, analytics)
 - Dark / light mode toggle
@@ -18,7 +18,7 @@ A production-ready full-stack platform for analysing air quality datasets, compa
 - **Frontend**: React 19, TailwindCSS, Shadcn UI, Recharts, Framer Motion, Phosphor Icons
 - **Backend**: FastAPI, Motor (async MongoDB), scikit-learn, XGBoost, reportlab
 - **Auth**: JWT httpOnly cookies + bcrypt
-- **AI**: Claude Sonnet 4.5 via Emergent Universal Key
+- **Insights**: Deterministic local dataset summaries
 
 ## Installation
 
@@ -44,7 +44,8 @@ JWT_SECRET=<64-char-hex>
 ADMIN_EMAIL=admin@aqi.io
 ADMIN_PASSWORD=admin123
 FRONTEND_URL=http://localhost:3000
-EMERGENT_LLM_KEY=<your-key>
+COOKIE_SECURE=false
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
 
 ### `frontend/.env`
@@ -56,7 +57,7 @@ REACT_APP_BACKEND_URL=http://localhost:8001
 
 ### Backend
 ```bash
-cd backend && uvicorn server:app --reload --port 8001
+cd backend && python server.py
 ```
 
 ### Frontend
