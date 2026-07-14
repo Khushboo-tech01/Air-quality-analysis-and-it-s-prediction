@@ -64,38 +64,6 @@ class TestAuth:
         assert r.status_code == 409
 
 
-class TestGuest:
-    def test_guest_login_and_me(self):
-        s = requests.Session()
-        r = s.post(f"{API}/auth/guest")
-        assert r.status_code == 200, r.text
-        j = r.json()
-        assert j["email"] == "guest@aqi.io"
-        assert j["role"] == "user"
-        # cookie should be set
-        assert "access_token" in s.cookies
-        # /auth/me should now work
-        r = s.get(f"{API}/auth/me")
-        assert r.status_code == 200
-        assert r.json()["email"] == "guest@aqi.io"
-
-    def test_guest_can_seed_and_list(self):
-        s = requests.Session()
-        r = s.post(f"{API}/auth/guest"); assert r.status_code == 200
-        r = s.post(f"{API}/datasets/seed-sample"); assert r.status_code == 200
-        dsid = r.json()["id"]
-        r = s.get(f"{API}/datasets"); assert r.status_code == 200
-        assert any(d["id"] == dsid for d in r.json())
-        # cleanup
-        s.delete(f"{API}/datasets/{dsid}")
-
-    def test_guest_forbidden_admin(self):
-        s = requests.Session()
-        s.post(f"{API}/auth/guest")
-        r = s.get(f"{API}/admin/analytics")
-        assert r.status_code == 403
-
-
 class TestDatasetsAndML:
     def test_seed_and_flow(self, user_session):
         # seed

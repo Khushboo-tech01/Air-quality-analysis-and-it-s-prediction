@@ -64,10 +64,11 @@ def detect_column(columns: List[str], aliases: List[str]) -> str | None:
     for alias in aliases:
         if alias in lowered:
             return lowered[alias]
-    # fuzzy contains
+    # Fuzzy contains are useful for descriptive names, but short aliases such as
+    # "p" and "t" must not match unrelated columns like PM2.5 or Date.
     for c_lower, c_orig in lowered.items():
         for alias in aliases:
-            if alias in c_lower or c_lower in alias:
+            if len(alias) >= 3 and alias in c_lower:
                 return c_orig
     return None
 

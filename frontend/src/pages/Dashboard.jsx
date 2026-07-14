@@ -26,10 +26,10 @@ export default function Dashboard() {
     })();
   }, []);
 
-  const trainedCount = datasets.filter((d) => d.trained).length;
   const today = new Date().toISOString().slice(0, 10);
   const todaysPredictions = predictions.filter((p) => (p.date || p.created_at || "").slice(0, 10) === today).length;
   const bestAccuracy = datasets.reduce((best, d) => Math.max(best, ...(d.model_results || []).map((m) => Number(m.r2 || m.accuracy || 0) * (Number(m.r2 || m.accuracy || 0) <= 1 ? 100 : 1))), 0);
+  const lastPrediction = predictions[0];
   const chartData = [...predictions].reverse().map((p, i) => ({
     idx: i + 1,
     aqi: p.aqi,
@@ -49,14 +49,20 @@ export default function Dashboard() {
       />
       <PageBody>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard label="Datasets"    value={datasets.length}   icon={Database}     testid="stat-datasets" />
-          <StatCard label="Trained"     value={trainedCount}      icon={Brain}        testid="stat-trained" />
-          <StatCard label="Predictions" value={predictions.length}icon={Compass}      testid="stat-predictions" />
-          <StatCard label="Best avg AQI" value={
-            predictions.length
-              ? Math.round(predictions.reduce((s, p) => s + p.aqi, 0) / predictions.length)
-              : "—"
-          } icon={ChartLineUp} testid="stat-avg-aqi" />
+          <StatCard label="Total Predictions" value={predictions.length} icon={Compass} testid="stat-predictions" />
+          <StatCard label="Today's Predictions" value={todaysPredictions} icon={ChartLineUp} testid="stat-today-predictions" />
+          <StatCard label="Uploaded Datasets" value={datasets.length} icon={Database} testid="stat-datasets" />
+          <StatCard label="Best Model Accuracy" value={bestAccuracy ? `${bestAccuracy.toFixed(1)}%` : "—"} icon={Brain} testid="stat-best-accuracy" />
+        </div>
+
+        <div className="mt-4 aq-card p-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between" data-testid="stat-last-prediction">
+          <div>
+            <p className="text-xs uppercase text-muted-foreground">Last Prediction</p>
+            <p className="font-display text-lg font-semibold">
+              {lastPrediction ? `${Math.round(lastPrediction.aqi)} AQI · ${lastPrediction.category}` : "No predictions yet"}
+            </p>
+          </div>
+          {lastPrediction && <AQIBadge aqi={lastPrediction.aqi} />}
         </div>
 
         <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-4">

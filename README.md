@@ -15,7 +15,7 @@ A production-ready full-stack platform for analysing air quality datasets, compa
 - Dark / light mode toggle
 
 ## Tech Stack
-- **Frontend**: React 19, TailwindCSS, Shadcn UI, Recharts, Framer Motion, Phosphor Icons
+- **Frontend**: React 18, TailwindCSS, Shadcn UI, Recharts, Framer Motion, Phosphor Icons
 - **Backend**: FastAPI, Motor (async MongoDB), scikit-learn, XGBoost, reportlab
 - **Auth**: JWT httpOnly cookies + bcrypt
 - **Insights**: Deterministic local dataset summaries
@@ -50,15 +50,19 @@ CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
 ### `frontend/.env`
 ```
-REACT_APP_BACKEND_URL=http://localhost:8001
+REACT_APP_BACKEND_URL=http://localhost:8000
+REACT_APP_OPENWEATHER_API_KEY=<openweather-api-key>
 ```
 
 ## Running
 
 ### Backend
 ```bash
-cd backend && python server.py
+cd backend
+.\run_backend.ps1
 ```
+
+On Windows, use the backend virtual environment. Running plain `python server.py` with the system Python can fail if ML packages such as `scikit-learn` are not installed globally.
 
 ### Frontend
 ```bash
@@ -91,7 +95,7 @@ cd frontend && yarn start
 - Admin: `admin@aqi.io` / `admin123` (auto-seeded on startup)
 
 ## API Endpoints (selected)
-- `POST /api/auth/register`, `/api/auth/login`, `/api/auth/logout`, `/api/auth/me`
+- `POST /api/auth/register`, `/api/auth/login`, `/api/auth/logout`, `GET /api/auth/me`, `POST /api/auth/refresh`
 - `POST /api/datasets/upload`, `/api/datasets/seed-sample`
 - `GET /api/datasets`, `GET /api/datasets/{id}`, `DELETE /api/datasets/{id}`
 - `GET /api/datasets/{id}/eda`, `POST /api/datasets/{id}/clean`

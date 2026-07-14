@@ -8,7 +8,7 @@ import { Wind } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
 export default function Register() {
-  const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", confirmPassword: "" });
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
   const nav = useNavigate();
@@ -18,6 +18,7 @@ export default function Register() {
   const submit = async (e) => {
     e.preventDefault();
     if (form.password.length < 6) return toast.error("Password must be at least 6 characters.");
+    if (form.password !== form.confirmPassword) return toast.error("Passwords do not match.");
     setLoading(true);
     const res = await register(form.email.trim(), form.password, form.name.trim());
     setLoading(false);
@@ -65,6 +66,10 @@ export default function Register() {
             <div>
               <Label htmlFor="password">Password</Label>
               <Input id="password" type="password" required minLength={6} value={form.password} onChange={set("password")} data-testid="register-password-input" className="mt-1.5" placeholder="Min 6 characters" />
+            </div>
+            <div>
+              <Label htmlFor="confirmPassword">Confirm password</Label>
+              <Input id="confirmPassword" type="password" required minLength={6} value={form.confirmPassword} onChange={set("confirmPassword")} data-testid="register-confirm-password-input" className="mt-1.5" placeholder="Repeat password" />
             </div>
             <Button type="submit" className="w-full" size="lg" disabled={loading} data-testid="register-submit-btn">
               {loading ? "Creating…" : "Create account"}

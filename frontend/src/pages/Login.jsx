@@ -77,7 +77,6 @@ export default function Login() {
             <div>
               <div className="flex items-center justify-between">
                 <Label htmlFor="password">Password</Label>
-                <Link to="/forgot" className="text-xs text-primary hover:underline" data-testid="link-forgot">Forgot?</Link>
               </div>
               <div className="relative mt-1.5">
                 <Input

@@ -5,7 +5,6 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import os
-import secrets
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
@@ -60,7 +59,6 @@ async def _startup():
     await db.users.create_index("email", unique=True)
     await db.datasets.create_index("user_id")
     await db.predictions.create_index("user_id")
-    await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     await db.login_attempts.create_index("identifier")
     await seed_admin(db)
     logger.info("Startup complete — admin seeded, indexes ensured.")
@@ -108,14 +106,6 @@ class LoginIn(BaseModel):
     email: EmailStr
     password: str
 
-
-class ForgotIn(BaseModel):
-    email: EmailStr
-
-
-class ResetIn(BaseModel):
-    token: str
-    password: str = Field(min_length=6)
 
 class ProfileIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
@@ -177,17 +167,6 @@ async def logout(response: Response):
     return {"ok": True}
 
 
-@api.post("/auth/guest")
-async def guest_login(response: Response):
-    """Auto-login as the shared guest user — enables the no-login-page UX."""
-    user = await db.users.find_one({"email": "guest@aqi.io"})
-    if not user:
-        raise HTTPException(status_code=500, detail="Guest account is not seeded")
-    uid = str(user["_id"])
-    set_auth_cookies(response, create_access_token(uid, user["email"]), create_refresh_token(uid))
-    return _serialize(user)
-
-
 @api.get("/auth/me")
 async def me(user=Depends(get_current_user)):
     return user
@@ -213,33 +192,6 @@ async def refresh(request: Request, response: Response):
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-
-@api.post("/auth/forgot-password")
-async def forgot(payload: ForgotIn):
-    email = payload.email.lower()
-    user = await db.users.find_one({"email": email})
-    # Always return ok (don't leak account existence)
-    if user:
-        token = secrets.token_urlsafe(32)
-        from datetime import timedelta
-        expires = datetime.now(timezone.utc) + timedelta(hours=1)
-        await db.password_reset_tokens.insert_one({
-            "user_id": user["_id"], "token": token, "used": False, "expires_at": expires
-        })
-        logger.info(f"[password reset] token for {email}: {token}")
-    return {"ok": True, "message": "If this account exists, a reset link has been logged."}
-
-
-@api.post("/auth/reset-password")
-async def reset(payload: ResetIn):
-    doc = await db.password_reset_tokens.find_one({"token": payload.token, "used": False})
-    if not doc:
-        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
-    if doc["expires_at"] < datetime.now(timezone.utc):
-        raise HTTPException(status_code=400, detail="Reset token has expired")
-    await db.users.update_one({"_id": doc["user_id"]}, {"$set": {"password_hash": hash_password(payload.password)}})
-    await db.password_reset_tokens.update_one({"_id": doc["_id"]}, {"$set": {"used": True}})
-    return {"ok": True}
 
 @api.patch("/auth/profile")
 async def update_profile(payload: ProfileIn, user=Depends(get_current_user)):

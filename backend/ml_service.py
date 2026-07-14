@@ -28,16 +28,18 @@ def _select_feature_frame(df: pd.DataFrame, schema: Dict) -> tuple[pd.DataFrame,
     key_order: List[str] = []
     for k in CANONICAL_FEATURES:
         col = schema["features"].get(k)
-        if col and col in df.columns:
+        if col and col in df.columns and col not in used_cols:
             used_cols.append(col)
             key_order.append(k)
     if not used_cols:
         raise ValueError("Dataset has no recognisable pollutant/weather columns.")
     X = df[used_cols].apply(pd.to_numeric, errors="coerce")
-    means: Dict[str, float] = {k: float(X[c].mean()) if pd.notna(X[c].mean()) else 0.0
-                               for k, c in zip(key_order, used_cols)}
-    X = X.fillna(pd.Series(means.values(), index=X.columns))
     X.columns = key_order
+    means: Dict[str, float] = {}
+    for key in key_order:
+        mean = X[key].mean()
+        means[key] = float(mean) if pd.notna(mean) else 0.0
+    X = X.fillna(pd.Series(means))
     return X, key_order, means
 
 

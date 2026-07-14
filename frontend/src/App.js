@@ -14,8 +14,6 @@ import Reports       from "@/pages/Reports";
 import Admin         from "@/pages/Admin";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
-import Forgot from "@/pages/Forgot";
-import Reset from "@/pages/Reset";
 import Account from "@/pages/Account";
 import Legal from "@/pages/Legal";
 
@@ -44,8 +42,6 @@ export default function App() {
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
-              <Route path="/forgot" element={<Forgot />} />
-              <Route path="/reset-password" element={<Reset />} />
               <Route path="/about" element={<Legal page="about" />} />
               <Route path="/contact" element={<Legal page="contact" />} />
               <Route path="/faq" element={<Legal page="faq" />} />
