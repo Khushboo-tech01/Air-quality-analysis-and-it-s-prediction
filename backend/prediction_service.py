@@ -58,18 +58,3 @@ def build_ai_prediction(prediction: Dict, aqi_info: Dict, features: Dict[str, fl
         "features_used": prediction.get("features_used", []),
     }
 
-
-def build_model_performance(dataset: Dict, prediction: Dict) -> Dict:
-    metrics = prediction.get("metrics") or {}
-    return {
-        "algorithm": prediction.get("model"),
-        "training_accuracy": round(max(0.0, float(metrics.get("r2", 0.0))) * 100, 1),
-        "validation_accuracy": round(max(0.0, float(metrics.get("cv_r2", 0.0))) * 100, 1),
-        "rmse": metrics.get("rmse"),
-        "mae": metrics.get("mae"),
-        "r2_score": metrics.get("r2"),
-        "dataset_used": dataset.get("name"),
-        "training_date": prediction.get("trained_at") or dataset.get("trained_at"),
-        "model_version": prediction.get("model_version"),
-        "rows_used": prediction.get("dataset_rows"),
-    }

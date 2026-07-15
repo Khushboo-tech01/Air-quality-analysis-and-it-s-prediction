@@ -2,15 +2,17 @@ import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
-  House, Compass, FileText, Wind,
+  House, Compass, FileText, Wind, ChartLineUp,
   Sun, Moon, User, SignOut,
 } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard",   icon: House,        testid: "nav-dashboard" },
-  { to: "/predict",   label: "Live Monitor", icon: Compass,      testid: "nav-predict" },
+  { to: "/predict",   label: "Predict AQI", icon: Compass,      testid: "nav-predict" },
+  { to: "/forecast",  label: "Forecast",    icon: ChartLineUp,  testid: "nav-forecast" },
   { to: "/reports",   label: "Reports",     icon: FileText,     testid: "nav-reports" },
+  { to: "/account",   label: "Profile",     icon: User,         testid: "nav-profile" },
 ];
 
 export default function AppLayout() {
@@ -65,10 +67,7 @@ export default function AppLayout() {
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             <span className="ml-1.5">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
           </Button>
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="outline" size="sm" onClick={() => navigate("/account")}><User size={15} className="mr-1" />Profile</Button>
-            <Button variant="outline" size="sm" onClick={signOut}><SignOut size={15} className="mr-1" />Logout</Button>
-          </div>
+          <Button variant="outline" size="sm" className="w-full" onClick={signOut}><SignOut size={15} className="mr-1" />Logout</Button>
         </div>
       </aside>
 

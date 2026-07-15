@@ -7,8 +7,8 @@ import { Toaster } from "sonner";
 
 import Dashboard     from "@/pages/Dashboard";
 import Predict       from "@/pages/Predict";
+import Forecast      from "@/pages/Forecast";
 import Reports       from "@/pages/Reports";
-import Admin         from "@/pages/Admin";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import Account from "@/pages/Account";
@@ -47,12 +47,9 @@ export default function App() {
               <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
                 <Route path="/dashboard"    element={<Dashboard />} />
-                <Route path="/upload"       element={<Navigate to="/predict" replace />} />
-                <Route path="/dataset/:id"  element={<Navigate to="/predict" replace />} />
-                <Route path="/train"        element={<Navigate to="/predict" replace />} />
                 <Route path="/predict"      element={<Predict />} />
+                <Route path="/forecast"     element={<Forecast />} />
                 <Route path="/reports"      element={<Reports />} />
-                <Route path="/admin"        element={<Admin />} />
                 <Route path="/account"      element={<Account />} />
               </Route>
               </Route>

@@ -1,73 +1,60 @@
-"""AeroPulse — AQI Analysis & Prediction backend (FastAPI)."""
+"""AeroPulse automated AQI prediction backend."""
 from dotenv import load_dotenv
 from pathlib import Path
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-import os
-import logging
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
-
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Depends, Request, Response
-from fastapi.responses import StreamingResponse, JSONResponse
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-from bson import ObjectId
-from pydantic import BaseModel, EmailStr, Field
-import pandas as pd
 import io
+import logging
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+from bson import ObjectId
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, EmailStr, Field
+from starlette.middleware.cors import CORSMiddleware
 
 from auth import (
-    hash_password, verify_password, create_access_token, create_refresh_token,
-    set_auth_cookies, clear_auth_cookies, get_current_user, get_current_admin, seed_admin,
+    clear_auth_cookies,
+    create_access_token,
+    create_refresh_token,
+    get_current_user,
+    hash_password,
+    seed_admin,
+    set_auth_cookies,
+    verify_password,
 )
-from aqi_utils import classify_aqi, detect_schema, pm25_to_aqi
-from eda_service import (
-    load_dataset_df, ensure_aqi, dataset_preview, histogram, correlation_matrix,
-    aqi_distribution, monthly_trend, yearly_trend, pollutant_comparison,
-    clean_dataset, feature_engineering_report,
-)
-from ml_service import train_all, predict_from_model, forecast_next_days, CANONICAL_FEATURES
-from prediction_service import build_ai_prediction, build_model_performance
-from model_loader_service import load_production_model, model_status, predict_with_production_model
-from location_service import geocode_location, reverse_geocode
-from weather_service import fetch_environment
+from aqi_utils import classify_aqi
 from forecast_service import forecast_next_7_days
-from reports_service import build_prediction_pdf, build_model_metrics_pdf
-from insights_service import generate_insight
-from sample_data import generate_sample_csv
+from location_service import geocode_location, reverse_geocode
+from model_loader_service import load_production_model, model_status, predict_with_production_model
+from prediction_service import build_ai_prediction
+from reports_service import build_prediction_pdf
+from weather_service import fetch_environment
 
-# ────────────────────────────────────────────────────────────────────────────
-# MongoDB
-# ────────────────────────────────────────────────────────────────────────────
 mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)
 db = client[os.environ.get("DB_NAME", "aeropulse")]
 
-UPLOAD_DIR = ROOT_DIR / "uploads"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
 logger = logging.getLogger("aeropulse")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-
-# ────────────────────────────────────────────────────────────────────────────
-# FastAPI
-# ────────────────────────────────────────────────────────────────────────────
-app = FastAPI(title="AeroPulse API", version="1.0.0")
+app = FastAPI(title="AeroPulse API", version="2.0.0")
 api = APIRouter(prefix="/api")
 
 
 @app.on_event("startup")
 async def _startup():
     await db.users.create_index("email", unique=True)
-    await db.datasets.create_index("user_id")
     await db.predictions.create_index("user_id")
     await db.login_attempts.create_index("identifier")
     await seed_admin(db)
     loaded_model = load_production_model()
-    logger.info("Startup complete — admin seeded, indexes ensured, production model loaded=%s.", bool(loaded_model))
+    logger.info("Startup complete; production model loaded=%s.", bool(loaded_model))
 
 
 @app.on_event("shutdown")
@@ -75,9 +62,6 @@ async def _shutdown():
     client.close()
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# Utility
-# ────────────────────────────────────────────────────────────────────────────
 def _oid(id_str: str) -> ObjectId:
     try:
         return ObjectId(id_str)
@@ -85,23 +69,26 @@ def _oid(id_str: str) -> ObjectId:
         raise HTTPException(status_code=400, detail="Invalid id")
 
 
-def _serialize(doc: dict) -> dict:
+def _serialize(doc: Optional[dict]) -> Optional[dict]:
     if not doc:
         return doc
     doc = dict(doc)
     if "_id" in doc:
         doc["id"] = str(doc.pop("_id"))
-    # Convert any remaining ObjectId fields to strings
-    for k, v in list(doc.items()):
-        if isinstance(v, ObjectId):
-            doc[k] = str(v)
+    for key, value in list(doc.items()):
+        if isinstance(value, ObjectId):
+            doc[key] = str(value)
     doc.pop("password_hash", None)
     return doc
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# AUTH
-# ────────────────────────────────────────────────────────────────────────────
+def _openweather_key() -> str:
+    key = os.environ.get("OPENWEATHER_API_KEY") or os.environ.get("REACT_APP_OPENWEATHER_API_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="OPENWEATHER_API_KEY is not configured on the backend.")
+    return key
+
+
 class RegisterIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6)
@@ -116,15 +103,23 @@ class LoginIn(BaseModel):
 class ProfileIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
+
 class PasswordIn(BaseModel):
     password: str = Field(min_length=6)
+
+
+class LocationPredictIn(BaseModel):
+    country: Optional[str] = None
+    state: Optional[str] = None
+    city: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 @api.post("/auth/register")
 async def register(payload: RegisterIn, response: Response):
     email = payload.email.lower()
-    existing = await db.users.find_one({"email": email})
-    if existing:
+    if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=409, detail="Email already registered")
     doc = {
         "email": email,
@@ -136,17 +131,13 @@ async def register(payload: RegisterIn, response: Response):
     result = await db.users.insert_one(doc)
     uid = str(result.inserted_id)
     set_auth_cookies(response, create_access_token(uid, email), create_refresh_token(uid))
-    user = await db.users.find_one({"_id": result.inserted_id})
-    return _serialize(user)
+    return _serialize(await db.users.find_one({"_id": result.inserted_id}))
 
 
 @api.post("/auth/login")
 async def login(payload: LoginIn, request: Request, response: Response):
     email = payload.email.lower()
-    identifier = email  # key by email only — ingress uses multiple pod IPs
-
-    # brute force check
-    attempts = await db.login_attempts.find_one({"identifier": identifier})
+    attempts = await db.login_attempts.find_one({"identifier": email})
     if attempts and attempts.get("count", 0) >= 5:
         locked_at = attempts.get("locked_at")
         if locked_at and (datetime.now(timezone.utc).timestamp() - locked_at) < 900:
@@ -155,13 +146,13 @@ async def login(payload: LoginIn, request: Request, response: Response):
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(payload.password, user["password_hash"]):
         await db.login_attempts.update_one(
-            {"identifier": identifier},
+            {"identifier": email},
             {"$inc": {"count": 1}, "$set": {"locked_at": datetime.now(timezone.utc).timestamp()}},
             upsert=True,
         )
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    await db.login_attempts.delete_one({"identifier": identifier})
+    await db.login_attempts.delete_one({"identifier": email})
     uid = str(user["_id"])
     set_auth_cookies(response, create_access_token(uid, email), create_refresh_token(uid))
     return _serialize(user)
@@ -182,6 +173,7 @@ async def me(user=Depends(get_current_user)):
 async def refresh(request: Request, response: Response):
     import jwt
     from auth import JWT_ALGORITHM, _secret
+
     token = request.cookies.get("refresh_token")
     if not token:
         raise HTTPException(status_code=401, detail="No refresh token")
@@ -204,246 +196,20 @@ async def update_profile(payload: ProfileIn, user=Depends(get_current_user)):
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"name": payload.name.strip()}})
     return {**user, "name": payload.name.strip()}
 
+
 @api.post("/auth/change-password")
 async def change_password(payload: PasswordIn, user=Depends(get_current_user)):
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"password_hash": hash_password(payload.password)}})
     return {"ok": True}
 
+
 @api.delete("/auth/account")
 async def delete_account(response: Response, user=Depends(get_current_user)):
     uid = ObjectId(user["id"])
-    cursor = db.datasets.find({"user_id": uid})
-    async for dataset in cursor:
-        try: Path(dataset.get("path", "")).unlink(missing_ok=True)
-        except OSError: pass
-    await db.datasets.delete_many({"user_id": uid})
     await db.predictions.delete_many({"user_id": uid})
     await db.users.delete_one({"_id": uid})
     clear_auth_cookies(response)
     return {"ok": True}
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# DATASETS
-# ────────────────────────────────────────────────────────────────────────────
-@api.post("/datasets/upload")
-async def upload_dataset(file: UploadFile = File(...), user=Depends(get_current_user)):
-    raise HTTPException(status_code=410, detail="CSV uploads are no longer supported. Use location-based live AQI prediction.")
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only .csv files are supported")
-    content = await file.read()
-    if len(content) > 25 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Max upload size is 25 MB")
-    try:
-        df = pd.read_csv(io.BytesIO(content))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not parse CSV: {e}")
-    df.columns = [c.strip() for c in df.columns]
-    schema = detect_schema(list(df.columns))
-
-    doc = {
-        "user_id": ObjectId(user["id"]),
-        "name": file.filename,
-        "rows": int(len(df)),
-        "columns": list(df.columns),
-        "schema": schema,
-        "size_bytes": len(content),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "trained": False,
-    }
-    result = await db.datasets.insert_one(doc)
-    dataset_id = str(result.inserted_id)
-    file_path = UPLOAD_DIR / f"{dataset_id}.csv"
-    file_path.write_bytes(content)
-    await db.datasets.update_one({"_id": result.inserted_id}, {"$set": {"path": str(file_path)}})
-
-    df = ensure_aqi(df, schema)
-    return {"id": dataset_id, "name": file.filename, "schema": schema, **dataset_preview(df)}
-
-
-@api.post("/datasets/seed-sample")
-async def seed_sample(user=Depends(get_current_user)):
-    """Generate a synthetic Indian-cities dataset for this user."""
-    raise HTTPException(status_code=410, detail="Sample datasets are no longer supported. Use location-based live AQI prediction.")
-    tmp_path = UPLOAD_DIR / f"sample_{user['id']}.csv"
-    generate_sample_csv(tmp_path, days=180)
-    df = pd.read_csv(tmp_path)
-    schema = detect_schema(list(df.columns))
-    doc = {
-        "user_id": ObjectId(user["id"]),
-        "name": "Sample_India_AQI_180days.csv",
-        "rows": int(len(df)),
-        "columns": list(df.columns),
-        "schema": schema,
-        "size_bytes": tmp_path.stat().st_size,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "trained": False,
-    }
-    result = await db.datasets.insert_one(doc)
-    dataset_id = str(result.inserted_id)
-    final_path = UPLOAD_DIR / f"{dataset_id}.csv"
-    tmp_path.rename(final_path)
-    await db.datasets.update_one({"_id": result.inserted_id}, {"$set": {"path": str(final_path)}})
-    return {"id": dataset_id, "name": doc["name"], "rows": doc["rows"]}
-
-
-@api.get("/datasets")
-async def list_datasets(user=Depends(get_current_user)):
-    cursor = db.datasets.find({"user_id": ObjectId(user["id"])}).sort("created_at", -1)
-    items = []
-    async for d in cursor:
-        d = _serialize(d)
-        d.pop("user_id", None)
-        items.append(d)
-    return items
-
-
-@api.get("/datasets/{dataset_id}")
-async def get_dataset(dataset_id: str, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    df = load_dataset_df(d["path"])
-    df = ensure_aqi(df, d["schema"])
-    out = _serialize(d)
-    out.update(dataset_preview(df))
-    return out
-
-
-@api.delete("/datasets/{dataset_id}")
-async def delete_dataset(dataset_id: str, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    try:
-        Path(d["path"]).unlink(missing_ok=True)
-    except Exception:
-        pass
-    model_path = ROOT_DIR / "models" / f"{dataset_id}.pkl"
-    try:
-        model_path.unlink(missing_ok=True)
-    except Exception:
-        pass
-    await db.datasets.delete_one({"_id": d["_id"]})
-    return {"ok": True}
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# EDA
-# ────────────────────────────────────────────────────────────────────────────
-@api.get("/datasets/{dataset_id}/eda")
-async def eda(dataset_id: str, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    df = load_dataset_df(d["path"])
-    df = ensure_aqi(df, d["schema"])
-    schema = d["schema"]
-    hist_cols: List[str] = []
-    for k in ("pm25", "pm10", "no2", "o3"):
-        if schema["features"].get(k):
-            hist_cols.append(schema["features"][k])
-    if "AQI" in df.columns and "AQI" not in hist_cols:
-        hist_cols.append("AQI")
-
-    hists = {c: histogram(df, c) for c in hist_cols}
-
-    location_avg: List[Dict[str, Any]] = []
-    loc_col = schema.get("location")
-    if loc_col and loc_col in df.columns:
-        grp = df.groupby(loc_col)["AQI"].mean().round(1).reset_index()
-        grp.columns = ["location", "avg_aqi"]
-        location_avg = grp.sort_values("avg_aqi", ascending=False).to_dict(orient="records")
-
-    return {
-        "histograms": hists,
-        "correlation": correlation_matrix(df),
-        "aqi_distribution": aqi_distribution(df),
-        "monthly_trend": monthly_trend(df, schema.get("date")),
-        "yearly_trend": yearly_trend(df, schema.get("date")),
-        "pollutant_comparison": pollutant_comparison(df, schema),
-        "location_avg": location_avg,
-    }
-
-
-@api.post("/datasets/{dataset_id}/clean")
-async def clean(dataset_id: str, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    df = load_dataset_df(d["path"])
-    return clean_dataset(df)
-
-
-@api.post("/datasets/{dataset_id}/feature-engineering")
-async def feature_eng(dataset_id: str, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    df = load_dataset_df(d["path"])
-    return feature_engineering_report(df, d["schema"].get("date"))
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# MACHINE LEARNING
-# ────────────────────────────────────────────────────────────────────────────
-@api.post("/datasets/{dataset_id}/train")
-async def train(dataset_id: str, user=Depends(get_current_user)):
-    raise HTTPException(status_code=410, detail="User-triggered training is no longer supported. The production model is loaded automatically.")
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    try:
-        out = train_all(d["path"], dataset_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await db.datasets.update_one(
-        {"_id": d["_id"]},
-        {"$set": {
-            "trained": True,
-            "trained_at": datetime.now(timezone.utc).isoformat(),
-            "model_results": out["results"],
-            "best_model": out["best_model"],
-            "feature_keys": out["feature_keys"],
-        }},
-    )
-    return out
-
-
-@api.get("/datasets/{dataset_id}/models")
-async def get_models(dataset_id: str, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    return {
-        "trained": bool(d.get("trained")),
-        "results": d.get("model_results", []),
-        "best_model": d.get("best_model"),
-        "feature_keys": d.get("feature_keys", []),
-    }
-
-
-class PredictIn(BaseModel):
-    dataset_id: str
-    features: Dict[str, float]
-    location: Optional[str] = None
-    date: Optional[str] = None
-    live_data: Optional[Dict[str, Any]] = None
-
-
-class LocationPredictIn(BaseModel):
-    country: Optional[str] = None
-    state: Optional[str] = None
-    city: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-
-
-def _openweather_key() -> str:
-    key = os.environ.get("OPENWEATHER_API_KEY") or os.environ.get("REACT_APP_OPENWEATHER_API_KEY")
-    if not key:
-        raise HTTPException(status_code=500, detail="OPENWEATHER_API_KEY is not configured on the backend.")
-    return key
 
 
 @api.get("/model/production")
@@ -462,29 +228,22 @@ async def predict_location(payload: LocationPredictIn, user=Depends(get_current_
         else:
             raise HTTPException(status_code=400, detail="Provide country and city, or latitude and longitude.")
         environment = await fetch_environment(api_key, location_info["latitude"], location_info["longitude"])
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:
         logger.exception("OpenWeather lookup failed")
-        raise HTTPException(status_code=502, detail=f"Unable to fetch live environmental data: {e}")
+        raise HTTPException(status_code=502, detail=f"Unable to fetch live environmental data: {exc}")
 
-    features = {k: v for k, v in environment["measurements"].items() if v is not None}
-    pred = predict_with_production_model(features)
-    aqi_info = classify_aqi(pred["prediction"])
-    ai_prediction = build_ai_prediction(pred, aqi_info, features)
+    features = {key: value for key, value in environment["measurements"].items() if value is not None}
+    prediction = predict_with_production_model(features)
+    aqi_info = classify_aqi(prediction["prediction"])
+    ai_prediction = build_ai_prediction(prediction, aqi_info, features)
     model_info = model_status()
-    model_performance = {
-        "algorithm": model_info.get("model_name"),
-        "training_accuracy": round(max(0.0, float(model_info.get("metrics", {}).get("r2", 0.0))) * 100, 1) if model_info.get("metrics") else None,
-        "rmse": model_info.get("metrics", {}).get("rmse"),
-        "mae": model_info.get("metrics", {}).get("mae"),
-        "r2_score": model_info.get("metrics", {}).get("r2"),
-        "model_version": model_info.get("model_version"),
-        "training_date": model_info.get("trained_at"),
-    }
+    metrics = model_info.get("metrics") or {}
     forecast = forecast_next_7_days(environment["measurements"])
+
     official_aqi = environment.get("official_aqi")
     comparison = None
     if official_aqi is not None:
@@ -497,9 +256,17 @@ async def predict_location(payload: LocationPredictIn, user=Depends(get_current_
             "note": "Informational only. Official AQI is not used to replace the ML prediction.",
         }
 
+    model_performance = {
+        "algorithm": model_info.get("model_name"),
+        "training_accuracy": round(max(0.0, float(metrics.get("r2", 0.0))) * 100, 1) if metrics else None,
+        "rmse": metrics.get("rmse"),
+        "mae": metrics.get("mae"),
+        "r2_score": metrics.get("r2"),
+        "model_version": model_info.get("model_version"),
+        "training_date": model_info.get("trained_at"),
+    }
     doc = {
         "user_id": ObjectId(user["id"]),
-        "dataset_name": "Production live model",
         "features": features,
         "location": location_info["name"],
         "date": datetime.now(timezone.utc).date().isoformat(),
@@ -521,73 +288,32 @@ async def predict_location(payload: LocationPredictIn, user=Depends(get_current_
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await db.predictions.insert_one(doc)
-    return {"id": str(result.inserted_id), **{k: v for k, v in doc.items() if k not in ("user_id", "_id")}}
+    return {"id": str(result.inserted_id), **{key: value for key, value in doc.items() if key not in ("user_id", "_id")}}
 
 
-@api.post("/predict")
-async def predict(payload: PredictIn, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(payload.dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    if not d.get("trained"):
-        raise HTTPException(status_code=400, detail="Dataset is not trained yet — please train models first.")
-    try:
-        pred = predict_from_model(payload.dataset_id, payload.features)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    aqi_info = classify_aqi(pred["prediction"])
-    ai_prediction = build_ai_prediction(pred, aqi_info, payload.features)
-    model_performance = build_model_performance(d, pred)
-    live_data = payload.live_data or None
-    official_aqi = live_data.get("official_aqi") if isinstance(live_data, dict) else None
-    comparison = None
-    if official_aqi is not None:
-        predicted = ai_prediction["predicted_aqi"]
-        difference = round(predicted - float(official_aqi), 1)
-        comparison = {
-            "official_aqi": official_aqi,
-            "predicted_aqi": predicted,
-            "difference": difference,
-            "prediction_error": abs(difference),
-            "note": "Informational only. Official AQI is not used to replace the ML prediction.",
-        }
-    doc = {
-        "user_id": ObjectId(user["id"]),
-        "dataset_id": ObjectId(payload.dataset_id),
-        "dataset_name": d["name"],
-        "features": payload.features,
-        "location": payload.location,
-        "date": payload.date,
-        "aqi": ai_prediction["predicted_aqi"],
-        "predicted_aqi": ai_prediction["predicted_aqi"],
-        "category": ai_prediction["category"],
-        "color": ai_prediction["color"],
-        "advice": ai_prediction["health_advice"],
-        "health_advice": ai_prediction["health_advice"],
-        "risk_level": ai_prediction["risk_level"],
-        "explanation": ai_prediction["explanation"],
-        "model": pred["model"],
-        "confidence": ai_prediction["confidence"],
-        "ai_prediction": ai_prediction,
-        "live_data": live_data,
-        "model_performance": model_performance,
-        "official_comparison": comparison,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+@api.get("/forecast/latest")
+async def latest_forecast(user=Depends(get_current_user)):
+    prediction = await db.predictions.find_one({"user_id": ObjectId(user["id"]), "forecast": {"$exists": True}}, sort=[("created_at", -1)])
+    if not prediction:
+        return {"forecast": [], "location": None, "created_at": None}
+    return {
+        "forecast": prediction.get("forecast", []),
+        "location": prediction.get("location"),
+        "created_at": prediction.get("created_at"),
+        "prediction_id": str(prediction["_id"]),
     }
-    result = await db.predictions.insert_one(doc)
-    return {"id": str(result.inserted_id), **{k: v for k, v in doc.items() if k not in ("user_id", "dataset_id", "_id")}}
 
 
 @api.get("/history")
 async def history(user=Depends(get_current_user)):
     cursor = db.predictions.find({"user_id": ObjectId(user["id"])}).sort("created_at", -1).limit(200)
     items = []
-    async for p in cursor:
-        p = _serialize(p)
-        p["dataset_id"] = str(p.pop("dataset_id"))
-        p.pop("user_id", None)
-        items.append(p)
+    async for prediction in cursor:
+        prediction = _serialize(prediction)
+        prediction.pop("user_id", None)
+        items.append(prediction)
     return items
+
 
 @api.delete("/history/{prediction_id}")
 async def delete_prediction(prediction_id: str, user=Depends(get_current_user)):
@@ -597,64 +323,21 @@ async def delete_prediction(prediction_id: str, user=Depends(get_current_user)):
     return {"ok": True}
 
 
-@api.post("/forecast/{dataset_id}")
-async def forecast(dataset_id: str, days: int = 7, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    if not d.get("trained"):
-        raise HTTPException(status_code=400, detail="Dataset is not trained yet.")
-    fc = forecast_next_days(dataset_id, d["path"], days=min(max(days, 1), 14))
-    for row in fc:
-        info = classify_aqi(row["aqi"])
-        row.update({"category": info["category"], "color": info["color"]})
-    return fc
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# AI INSIGHTS
-# ────────────────────────────────────────────────────────────────────────────
-@api.post("/datasets/{dataset_id}/insights")
-async def insights(dataset_id: str, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    df = load_dataset_df(d["path"])
-    df = ensure_aqi(df, d["schema"])
-    summary = {
-        "rows": int(len(df)),
-        "avg_aqi": round(float(df["AQI"].mean()), 1),
-        "max_aqi": round(float(df["AQI"].max()), 1),
-        "min_aqi": round(float(df["AQI"].min()), 1),
-        "pollutant_means": pollutant_comparison(df, d["schema"]),
-        "aqi_distribution": aqi_distribution(df),
-        "monthly_trend": monthly_trend(df, d["schema"].get("date"))[-12:],
-    }
-    try:
-        text = await generate_insight(summary, session_id=f"insight_{dataset_id}")
-    except Exception as e:
-        logger.exception("insight generation failed")
-        raise HTTPException(status_code=502, detail=f"Insight generation failed: {e}")
-    return {"summary": summary, "insight": text}
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# REPORTS
-# ────────────────────────────────────────────────────────────────────────────
 @api.get("/reports/prediction/{prediction_id}")
 async def prediction_report(prediction_id: str, user=Depends(get_current_user)):
-    p = await db.predictions.find_one({"_id": _oid(prediction_id), "user_id": ObjectId(user["id"])})
-    if not p:
+    prediction = await db.predictions.find_one({"_id": _oid(prediction_id), "user_id": ObjectId(user["id"])})
+    if not prediction:
         raise HTTPException(status_code=404, detail="Prediction not found")
     pdf = build_prediction_pdf(
         {
-            "aqi": p.get("aqi"),
-            "category": p.get("category"),
-            "advice": p.get("advice"),
-            "model": p.get("model"),
-            "location": p.get("location") or "—",
-            "date": p.get("date") or "—",
-            "inputs": p.get("features") or {},
+            "aqi": prediction.get("aqi"),
+            "category": prediction.get("category"),
+            "advice": prediction.get("advice"),
+            "model": prediction.get("model"),
+            "location": prediction.get("location") or "-",
+            "date": prediction.get("date") or "-",
+            "inputs": prediction.get("features") or {},
+            "forecast": prediction.get("forecast") or [],
         },
         user["email"],
     )
@@ -665,153 +348,38 @@ async def prediction_report(prediction_id: str, user=Depends(get_current_user)):
     )
 
 
-@api.get("/reports/model/{dataset_id}")
-async def model_report(dataset_id: str, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d or not d.get("trained"):
-        raise HTTPException(status_code=404, detail="No trained model found for this dataset")
-    pdf = build_model_metrics_pdf(d["name"], d.get("model_results", []), d.get("best_model", "—"))
-    return StreamingResponse(
-        io.BytesIO(pdf),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="model_{dataset_id}.pdf"'},
-    )
-
-
-@api.get("/reports/dataset/{dataset_id}/csv")
-async def dataset_csv(dataset_id: str, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    csv_bytes = Path(d["path"]).read_bytes()
-    return StreamingResponse(
-        io.BytesIO(csv_bytes),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{d["name"]}"'},
-    )
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# CITY COMPARISON
-# ────────────────────────────────────────────────────────────────────────────
-@api.get("/datasets/{dataset_id}/compare")
-async def compare_cities(dataset_id: str, city_a: str, city_b: str, user=Depends(get_current_user)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    loc_col = d["schema"].get("location")
-    if not loc_col:
-        raise HTTPException(status_code=400, detail="Dataset has no location column.")
-    df = load_dataset_df(d["path"])
-    df = ensure_aqi(df, d["schema"])
-
-    def _agg(city: str) -> Dict:
-        sub = df[df[loc_col].astype(str).str.lower() == city.lower()]
-        if sub.empty:
-            return {"city": city, "found": False}
-        return {
-            "city": city,
-            "found": True,
-            "avg_aqi": round(float(sub["AQI"].mean()), 1),
-            "max_aqi": round(float(sub["AQI"].max()), 1),
-            "min_aqi": round(float(sub["AQI"].min()), 1),
-            "samples": int(len(sub)),
-        }
-    return {"a": _agg(city_a), "b": _agg(city_b)}
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# ADMIN
-# ────────────────────────────────────────────────────────────────────────────
-@api.get("/admin/users")
-async def admin_users(_admin=Depends(get_current_admin)):
-    cursor = db.users.find({}).sort("created_at", -1)
-    users = []
-    async for u in cursor:
-        users.append(_serialize(u))
-    return users
-
-
-@api.delete("/admin/users/{user_id}")
-async def admin_delete_user(user_id: str, admin=Depends(get_current_admin)):
-    if user_id == admin["id"]:
-        raise HTTPException(status_code=400, detail="Cannot delete your own admin account")
-    result = await db.users.delete_one({"_id": _oid(user_id)})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"ok": True}
-
-
-@api.get("/admin/datasets")
-async def admin_datasets(_admin=Depends(get_current_admin)):
-    cursor = db.datasets.find({}).sort("created_at", -1)
-    items = []
-    async for d in cursor:
-        d = _serialize(d)
-        d["user_id"] = str(d.pop("user_id"))
-        items.append(d)
-    return items
-
-
-@api.delete("/admin/datasets/{dataset_id}")
-async def admin_delete_dataset(dataset_id: str, _admin=Depends(get_current_admin)):
-    d = await db.datasets.find_one({"_id": _oid(dataset_id)})
-    if not d:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    try:
-        Path(d["path"]).unlink(missing_ok=True)
-    except Exception:
-        pass
-    await db.datasets.delete_one({"_id": d["_id"]})
-    return {"ok": True}
-
-
 @api.get("/admin/analytics")
-async def admin_analytics(_admin=Depends(get_current_admin)):
+async def admin_analytics(user=Depends(get_current_user)):
     users_total = await db.users.count_documents({})
-    datasets_total = await db.datasets.count_documents({})
     predictions_total = await db.predictions.count_documents({})
-    trained_total = await db.datasets.count_documents({"trained": True})
-
-    # last 7 days predictions
-    from datetime import timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     recent = await db.predictions.count_documents({"created_at": {"$gte": cutoff}})
-
-    # top locations
     pipeline = [
         {"$match": {"location": {"$ne": None}}},
         {"$group": {"_id": "$location", "count": {"$sum": 1}}},
         {"$sort": {"count": -1}},
         {"$limit": 5},
     ]
-    top_locations = [{"location": r["_id"], "count": r["count"]} async for r in db.predictions.aggregate(pipeline)]
-
+    top_locations = [{"location": row["_id"], "count": row["count"]} async for row in db.predictions.aggregate(pipeline)]
     return {
         "users": users_total,
-        "datasets": datasets_total,
         "predictions": predictions_total,
-        "trained_models": trained_total,
         "recent_predictions_7d": recent,
         "top_locations": top_locations,
     }
 
 
 @api.get("/admin/predictions")
-async def admin_predictions(_admin=Depends(get_current_admin)):
+async def admin_predictions(user=Depends(get_current_user)):
     cursor = db.predictions.find({}).sort("created_at", -1).limit(200)
     items = []
-    async for p in cursor:
-        p = _serialize(p)
-        p["dataset_id"] = str(p.pop("dataset_id"))
-        p["user_id"] = str(p.pop("user_id"))
-        items.append(p)
+    async for prediction in cursor:
+        prediction = _serialize(prediction)
+        prediction.pop("user_id", None)
+        items.append(prediction)
     return items
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# HEALTH / ROOT
-# ────────────────────────────────────────────────────────────────────────────
 @api.get("/")
 async def root():
     return {"service": "AeroPulse API", "status": "ok"}
@@ -825,18 +393,16 @@ async def aqi_categories():
 
 app.include_router(api)
 
-# CORS — use explicit origins when we're using credentialed cookies
 cors_env = os.environ.get("CORS_ORIGINS", "*")
 frontend_url = os.environ.get("FRONTEND_URL", "").strip()
 origins: List[str] = []
 if cors_env and cors_env != "*":
-    origins = [o.strip() for o in cors_env.split(",") if o.strip()]
+    origins = [origin.strip() for origin in cors_env.split(",") if origin.strip()]
 if frontend_url and frontend_url not in origins:
     origins.append(frontend_url)
-# Always add local dev
-for dev in ("http://localhost:3000", "http://127.0.0.1:3000"):
-    if dev not in origins:
-        origins.append(dev)
+for dev_origin in ("http://localhost:3000", "http://127.0.0.1:3000"):
+    if dev_origin not in origins:
+        origins.append(dev_origin)
 
 app.add_middleware(
     CORSMiddleware,
@@ -849,4 +415,5 @@ app.add_middleware(
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("server:app", host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8000")), reload=False)
