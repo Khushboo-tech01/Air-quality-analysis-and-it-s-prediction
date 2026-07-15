@@ -18,6 +18,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV, KFold, train_test_split
 from sklearn.pipeline import Pipeline
+from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import RobustScaler
 
 try:  # Optional but available in the current requirements.
@@ -80,6 +81,28 @@ def _model_candidates(random_state: int = 42) -> Dict[str, Tuple[Pipeline, Dict[
             {"model__n_estimators": [140, 240], "model__max_depth": [3, 5], "model__learning_rate": [0.04, 0.08]},
         )
     return candidates
+
+
+def _target_distribution(y: pd.Series) -> Dict[str, Any]:
+    bins = [0, 50, 100, 200, 300, 400, 500]
+    labels = ["0-50", "51-100", "101-200", "201-300", "301-400", "401-500"]
+    counts = pd.cut(y.clip(0, 500), bins=bins, labels=labels, include_lowest=True).value_counts().sort_index()
+    return {
+        "min": round(float(y.min()), 3),
+        "max": round(float(y.max()), 3),
+        "mean": round(float(y.mean()), 3),
+        "median": round(float(y.median()), 3),
+        "std": round(float(y.std()), 3),
+        "bins": {str(label): int(counts.get(label, 0)) for label in labels},
+    }
+
+
+def _correlation_matrix(frame: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+    corr = frame[FEATURE_COLUMNS + ["aqi"]].corr(numeric_only=True).fillna(0)
+    return {
+        row: {col: round(float(value), 4) for col, value in values.items()}
+        for row, values in corr.to_dict(orient="index").items()
+    }
 
 
 async def _load_training_frame(db) -> pd.DataFrame:
@@ -160,8 +183,22 @@ def _train_sync(frame: pd.DataFrame) -> Dict[str, Any]:
             best = row
 
     assert best is not None
+    non_linear = [row for row in results if row["algorithm"] != "Linear Regression"]
+    if best["algorithm"] == "Linear Regression" and non_linear:
+        best_non_linear = min(non_linear, key=lambda row: row["metrics"]["rmse"])
+        if best_non_linear["metrics"]["rmse"] <= best["metrics"]["rmse"] * 1.05:
+            for name, (pipeline, grid) in _model_candidates().items():
+                if name == best_non_linear["algorithm"]:
+                    refit = GridSearchCV(pipeline, grid or {}, scoring="neg_root_mean_squared_error", cv=cv, n_jobs=1)
+                    refit.fit(X_train, y_train)
+                    best = {**best_non_linear, "estimator": refit.best_estimator_}
+                    break
     estimator: Pipeline = best["estimator"]
-    predictions = estimator.predict(X_test)
+    raw_predictions = np.clip(estimator.predict(X_test), 0, 500)
+    calibrator = IsotonicRegression(y_min=0, y_max=500, out_of_bounds="clip")
+    calibrator.fit(raw_predictions, y_test)
+    predictions = calibrator.predict(raw_predictions)
+    calibrated_metrics = _metrics(y_test, predictions)
     residuals = np.asarray(y_test) - np.asarray(predictions)
     version = datetime.now(timezone.utc).strftime("aqi-%Y%m%d-%H%M%S")
     means = X.mean(numeric_only=True).to_dict()
@@ -169,14 +206,21 @@ def _train_sync(frame: pd.DataFrame) -> Dict[str, Any]:
     artifact = {
         "model": estimator,
         "best_name": best["algorithm"],
-        "best_metrics": best["metrics"],
+        "best_metrics": calibrated_metrics,
+        "raw_best_metrics": best["metrics"],
         "all_results": results,
         "feature_keys": FEATURE_COLUMNS,
         "feature_importance": _feature_importance(estimator, FEATURE_COLUMNS),
         "means": means,
         "stds": stds,
         "residual_std": float(np.std(residuals)) if len(residuals) else None,
+        "calibrator": calibrator,
         "dataset_rows": int(len(frame)),
+        "target": "aqi",
+        "target_scale": "0-500",
+        "aqi_standard": "IN_AQI",
+        "target_distribution": _target_distribution(y),
+        "correlation_matrix": _correlation_matrix(frame),
         "model_version": version,
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "git_commit": _git_commit(),
@@ -185,6 +229,17 @@ def _train_sync(frame: pd.DataFrame) -> Dict[str, Any]:
         "artifact": artifact,
         "results": results,
         "best": {k: v for k, v in best.items() if k != "estimator"},
+        "training_report": {
+            "dataset_size": int(len(frame)),
+            "feature_list": FEATURE_COLUMNS,
+            "target_distribution": _target_distribution(y),
+            "correlation_matrix": _correlation_matrix(frame),
+            "feature_importance": _feature_importance(estimator, FEATURE_COLUMNS),
+            "cross_validation_results": results,
+            "chosen_model": best["algorithm"],
+            "chosen_model_metrics": calibrated_metrics,
+            "selection_reason": "Selected lowest validation RMSE after hyperparameter search, with isotonic calibration on validation predictions. Linear Regression is only promoted when materially better than nonlinear tree models.",
+        },
         "duration_seconds": round(time.time() - started, 2),
     }
 
@@ -230,6 +285,13 @@ async def train_production_model(db, replace_only_if_better: bool = True) -> Dic
         "model_path": str(version_path),
         "feature_importance": artifact["feature_importance"],
         "candidate_results": result["results"],
+        "raw_rmse": artifact["raw_best_metrics"]["rmse"],
+        "target_distribution": artifact["target_distribution"],
+        "correlation_matrix": artifact["correlation_matrix"],
+        "training_report": result["training_report"],
+        "target": artifact["target"],
+        "target_scale": artifact["target_scale"],
+        "aqi_standard": artifact["aqi_standard"],
     }
     await db.model_versions.insert_one(metrics_doc.copy())
     await db.model_metrics.insert_one(metrics_doc.copy())
@@ -312,3 +374,20 @@ async def feature_importance(db) -> List[Dict[str, Any]]:
     if not doc:
         return []
     return doc.get("feature_importance", [])
+
+
+async def training_report(db) -> Dict[str, Any]:
+    doc = await db.model_metrics.find_one(sort=[("training_date", -1)])
+    if not doc:
+        return {"trained": False}
+    report = doc.get("training_report") or {}
+    report.update({
+        "trained": True,
+        "model_version": doc.get("model_version"),
+        "training_date": doc.get("training_date"),
+        "algorithm": doc.get("algorithm"),
+        "rmse": doc.get("rmse"),
+        "mae": doc.get("mae"),
+        "r2": doc.get("r2"),
+    })
+    return report

@@ -39,17 +39,19 @@ export default function AdminML() {
   const [history, setHistory] = useState([]);
   const [versions, setVersions] = useState([]);
   const [importance, setImportance] = useState([]);
+  const [report, setReport] = useState({});
 
   const refresh = async () => {
     setLoading(true);
     try {
-      const [statsRes, metricsRes, statusRes, historyRes, versionsRes, importanceRes] = await Promise.all([
+      const [statsRes, metricsRes, statusRes, historyRes, versionsRes, importanceRes, reportRes] = await Promise.all([
         api.get("/admin/dataset-statistics"),
         api.get("/admin/model-metrics"),
         api.get("/admin/training-status"),
         api.get("/admin/training-history"),
         api.get("/admin/model-versions"),
         api.get("/admin/feature-importance"),
+        api.get("/admin/training-report"),
       ]);
       setStats(statsRes.data || {});
       setMetrics(metricsRes.data || {});
@@ -57,6 +59,7 @@ export default function AdminML() {
       setHistory(historyRes.data || []);
       setVersions(versionsRes.data || []);
       setImportance(importanceRes.data || []);
+      setReport(reportRes.data || {});
     } catch (err) {
       toast.error(unwrapError(err));
     } finally {
@@ -198,6 +201,28 @@ export default function AdminML() {
             </div>
           </Panel>
         </div>
+
+        <Panel title="Training Report">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-sm">
+            <div className="rounded-md border border-border p-4">
+              <p className="text-xs uppercase text-muted-foreground">Chosen Model</p>
+              <p className="mt-1 font-semibold">{report.chosen_model || report.algorithm || "-"}</p>
+              <p className="mt-2 text-muted-foreground">{report.selection_reason || "No report generated yet."}</p>
+            </div>
+            <div className="rounded-md border border-border p-4">
+              <p className="text-xs uppercase text-muted-foreground">Target Distribution</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {Object.entries(report.target_distribution?.bins || {}).map(([label, value]) => (
+                  <div key={label} className="flex justify-between gap-2"><span>{label}</span><span className="font-mono">{value}</span></div>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-md border border-border p-4">
+              <p className="text-xs uppercase text-muted-foreground">Feature List</p>
+              <p className="mt-2 text-muted-foreground">{(report.feature_list || []).join(", ") || "-"}</p>
+            </div>
+          </div>
+        </Panel>
 
         <Panel title="Training Logs">
           <div className="overflow-auto">

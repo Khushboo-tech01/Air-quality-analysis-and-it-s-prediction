@@ -34,7 +34,7 @@ from location_service import geocode_location, reverse_geocode
 from model_loader_service import load_production_model, model_status
 from reports_service import build_prediction_pdf
 from services.data_collector import collect_historical_data
-from services.training_service import dataset_statistics, feature_importance, latest_model_metrics, train_production_model, training_history, training_status
+from services.training_service import dataset_statistics, feature_importance, latest_model_metrics, train_production_model, training_history, training_report, training_status
 from weather_service import fetch_environment
 
 mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
@@ -478,6 +478,12 @@ async def admin_dataset_statistics(user=Depends(get_current_user)):
 async def admin_feature_importance(user=Depends(get_current_user)):
     _require_admin(user)
     return await feature_importance(db)
+
+
+@api.get("/admin/training-report")
+async def admin_training_report(user=Depends(get_current_user)):
+    _require_admin(user)
+    return await training_report(db)
 
 
 @api.get("/admin/model-versions")

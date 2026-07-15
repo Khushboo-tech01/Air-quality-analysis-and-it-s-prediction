@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
-from aqi_utils import pm25_to_aqi
+from aqi_utils import pollutants_to_aqi
 
 logger = logging.getLogger("aeropulse.data_collector")
 _API_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
@@ -287,7 +287,9 @@ def clean_records(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     numeric = ["pm25", "pm10", "no2", "so2", "co", "o3", "temp", "humidity", "pressure", "wind", "rain", "clouds", "visibility"]
     frame[numeric] = frame.groupby("city")[numeric].transform(lambda group: group.ffill().bfill().fillna(group.median()))
     frame = frame.dropna(subset=["pm25", "pm10", "temp", "humidity", "pressure", "wind"])
-    frame["aqi"] = frame["pm25"].map(pm25_to_aqi)
+    frame["aqi"] = frame.apply(lambda row: pollutants_to_aqi(row.to_dict(), standard="IN_AQI"), axis=1)
+    frame["aqi_standard"] = "IN_AQI"
+    frame["target_source"] = "computed_pollutant_max_subindex"
     frame["timestamp"] = frame["timestamp"].dt.strftime("%Y-%m-%dT%H:%M:%S%z")
     return frame.to_dict("records")
 

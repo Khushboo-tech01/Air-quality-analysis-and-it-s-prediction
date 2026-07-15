@@ -33,6 +33,38 @@ def health_advice_for_category(category: str) -> Dict:
     return {"risk_level": "Hazardous", "advice": "Stay indoors and use air purifiers."}
 
 
+# India CPCB-style pollutant breakpoints. PM/NO2/SO2/O3 are ug/m3; CO is mg/m3.
+_INDIA_BP: Dict[str, List[Tuple[float, float, float, float]]] = {
+    "pm25": [(0, 30, 0, 50), (31, 60, 51, 100), (61, 90, 101, 200), (91, 120, 201, 300), (121, 250, 301, 400), (251, 500, 401, 500)],
+    "pm10": [(0, 50, 0, 50), (51, 100, 51, 100), (101, 250, 101, 200), (251, 350, 201, 300), (351, 430, 301, 400), (431, 600, 401, 500)],
+    "no2": [(0, 40, 0, 50), (41, 80, 51, 100), (81, 180, 101, 200), (181, 280, 201, 300), (281, 400, 301, 400), (401, 1000, 401, 500)],
+    "so2": [(0, 40, 0, 50), (41, 80, 51, 100), (81, 380, 101, 200), (381, 800, 201, 300), (801, 1600, 301, 400), (1601, 2000, 401, 500)],
+    "co": [(0, 1, 0, 50), (1.1, 2, 51, 100), (2.1, 10, 101, 200), (10.1, 17, 201, 300), (17.1, 34, 301, 400), (34.1, 50, 401, 500)],
+    "o3": [(0, 50, 0, 50), (51, 100, 51, 100), (101, 168, 101, 200), (169, 208, 201, 300), (209, 748, 301, 400), (749, 1000, 401, 500)],
+}
+
+
+def pollutant_subindex(pollutant: str, value: float | None, standard: str = "IN_AQI") -> float | None:
+    if value is None or value < 0:
+        return None
+    breakpoints = _INDIA_BP.get(pollutant.lower())
+    if not breakpoints:
+        return None
+    for c_lo, c_hi, i_lo, i_hi in breakpoints:
+        if c_lo <= value <= c_hi:
+            return round((i_hi - i_lo) / (c_hi - c_lo) * (value - c_lo) + i_lo, 1)
+    return 500.0
+
+
+def pollutants_to_aqi(values: Dict[str, float | None], standard: str = "IN_AQI") -> float:
+    subindices = [
+        pollutant_subindex(key, values.get(key), standard)
+        for key in ("pm25", "pm10", "no2", "so2", "co", "o3")
+    ]
+    valid = [value for value in subindices if value is not None]
+    return round(max(valid), 1) if valid else 0.0
+
+
 # EPA breakpoints for computing AQI sub-index from PM2.5 (24-hr avg, µg/m³)
 _PM25_BP: List[Tuple[float, float, float, float]] = [
     (0.0, 12.0, 0, 50),
