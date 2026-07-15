@@ -5,9 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AQIGauge } from "@/components/AQIGauge";
 import { POLLUTANT_META, POLLUTANT_ORDER } from "@/lib/aqi";
-import { ChartLineUp, Crosshair, Database, FileText, Gauge, MapPin, Pulse, ShieldCheck } from "@phosphor-icons/react";
+import { ChartLineUp, Crosshair, Database, FileText, MapPin, Pulse, ThermometerSimple, Wind } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar } from "recharts";
 
@@ -54,10 +53,11 @@ export default function Predict() {
   const [mode, setMode] = useState("place");
 
   const features = useMemo(() => result?.live_data?.measurements || {}, [result]);
-  const ai = result?.ai_prediction || {};
+  const aiForecast = result?.ai_forecast || {};
   const live = result?.live_data || {};
   const modelMetrics = result?.model_performance || {};
-  const forecast = result?.forecast || [];
+  const forecast = result?.forecast || aiForecast.days || [];
+  const tomorrow = forecast[0] || {};
 
   const chartFeatures = useMemo(
     () => POLLUTANT_ORDER.filter((key) => features[key] != null).map((key) => ({ name: POLLUTANT_META[key].label, value: Number(features[key]) })),
@@ -70,7 +70,7 @@ export default function Predict() {
       const { data } = await api.post("/predict/location", payload);
       setResult(data);
       setLastRequest(payload);
-      toast.success(`AI predicted AQI ${Math.round(data.predicted_aqi)}`);
+      toast.success(`Tomorrow forecast: AQI ${Math.round(data.predicted_aqi)}`);
     } catch (err) {
       toast.error(unwrapError(err));
     } finally {
@@ -114,8 +114,8 @@ export default function Predict() {
   return (
     <>
       <PageHeader
-        title="Live AI Air Quality Monitor"
-        subtitle="Choose a location once. Weather, pollution, prediction, forecast, and advice are generated automatically."
+        title="AI Air Quality Forecast"
+        subtitle="Choose a location to fetch live environmental measurements and forecast future AQI with the production ML model."
         actions={
           <Button variant="outline" onClick={() => lastRequest && runPrediction(lastRequest)} disabled={!lastRequest || loading}>
             <Pulse size={16} className="mr-1.5" /> Refresh
@@ -146,7 +146,7 @@ export default function Predict() {
                     <Input className="mt-1.5" value={location.city} onChange={(e) => setLocation((v) => ({ ...v, city: e.target.value }))} placeholder="New Delhi" />
                   </div>
                   <Button type="submit" size="lg" disabled={loading} className="self-end">
-                    <MapPin size={16} className="mr-1.5" /> {loading ? "Analyzing..." : "Analyze Location"}
+                    <MapPin size={16} className="mr-1.5" /> {loading ? "Forecasting..." : "Generate Forecast"}
                   </Button>
                 </form>
               ) : (
@@ -156,7 +156,7 @@ export default function Predict() {
                     <Input className="mt-1.5" value={coordinateText} onChange={(e) => setCoordinateText(e.target.value)} placeholder="28.61390, 77.20900" />
                   </div>
                   <Button type="submit" size="lg" disabled={loading} className="self-end">
-                    <Crosshair size={16} className="mr-1.5" /> {loading ? "Analyzing..." : "Analyze Coordinates"}
+                    <Crosshair size={16} className="mr-1.5" /> {loading ? "Forecasting..." : "Generate Forecast"}
                   </Button>
                 </form>
               )}
@@ -178,20 +178,22 @@ export default function Predict() {
               <div className="aq-card p-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h3 className="font-display text-xl font-semibold">Current AQI Inputs</h3>
-                    <p className="text-sm text-muted-foreground">Official live measurements used as model inputs.</p>
+                    <h3 className="font-display text-xl font-semibold">Current Environmental Conditions</h3>
+                    <p className="text-sm text-muted-foreground">Live measurements only. AI forecasting starts with tomorrow.</p>
                   </div>
                   <Database size={22} className="text-muted-foreground" />
                 </div>
                 <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
                   <InfoCard label="Location" value={result.location} icon={MapPin} />
-                  <InfoCard label="Coordinates" value={`${live.location?.latitude?.toFixed(4)}, ${live.location?.longitude?.toFixed(4)}`} />
-                  <InfoCard label="Last Updated" value={formatDate(live.timestamp, true)} />
+                  <InfoCard label="Temperature" value={features.temp != null ? `${features.temp} C` : "-"} icon={ThermometerSimple} />
+                  <InfoCard label="Humidity" value={features.humidity != null ? `${features.humidity}%` : "-"} />
+                  <InfoCard label="Pressure" value={features.pressure != null ? `${features.pressure} hPa` : "-"} />
+                  <InfoCard label="Wind Speed" value={features.wind != null ? `${features.wind} m/s` : "-"} icon={Wind} />
+                  <InfoCard label="Visibility" value={features.visibility != null ? `${features.visibility} m` : "-"} />
                   <InfoCard label="Weather" value={live.weather_condition} />
-                  <InfoCard label="Timezone" value={live.timezone != null ? `UTC ${live.timezone / 3600}` : "-"} />
-                  <InfoCard label="Sunrise" value={formatDate(live.sunrise)} />
-                  <InfoCard label="Sunset" value={formatDate(live.sunset)} />
+                  <InfoCard label="Coordinates" value={`${live.location?.latitude?.toFixed(4)}, ${live.location?.longitude?.toFixed(4)}`} />
                   <InfoCard label="Source" value={live.source} />
+                  <InfoCard label="Last Updated" value={formatDate(live.timestamp, true)} />
                 </div>
                 <div className="mt-4">
                   <PollutantCards features={features} />
@@ -202,34 +204,50 @@ export default function Predict() {
                 <div className="xl:col-span-2 aq-card p-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="font-display text-xl font-semibold">AI Prediction Dashboard</h3>
-                      <p className="text-sm text-muted-foreground">Prediction generated by the production ML model.</p>
+                      <h3 className="font-display text-xl font-semibold">AI AQI Forecast</h3>
+                      <p className="text-sm text-muted-foreground">Future AQI predicted from forecast weather and estimated pollutant behavior.</p>
                     </div>
-                    <Gauge size={22} className="text-muted-foreground" />
+                    <ChartLineUp size={22} className="text-muted-foreground" />
                   </div>
-                  <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <AQIGauge aqi={ai.predicted_aqi} />
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-3">
-                        <InfoCard label="Predicted AQI" value={Math.round(ai.predicted_aqi)} icon={Gauge} />
-                        <InfoCard label="Category" value={ai.category} icon={ShieldCheck} />
-                        <InfoCard label="Confidence" value={ai.confidence != null ? `${ai.confidence}%` : "-"} icon={Pulse} />
-                        <InfoCard label="Risk Level" value={ai.risk_level} />
-                        <InfoCard label="Model Used" value={ai.model_name} />
-                        <InfoCard label="Generated At" value={formatDate(ai.generated_at)} />
+                  <div className="mt-6 space-y-4">
+                    <div className="rounded-md border border-border p-4" style={{ borderLeft: `4px solid ${tomorrow.color || "#2563EB"}` }}>
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="text-xs uppercase tracking-wide text-muted-foreground">Tomorrow</p>
+                          <p className="mt-1 text-3xl font-semibold">{tomorrow.predicted_aqi != null ? Math.round(tomorrow.predicted_aqi) : "-"}</p>
+                          <p className="text-sm text-muted-foreground">{tomorrow.category || "-"} - {tomorrow.confidence != null ? `${tomorrow.confidence}% confidence` : "confidence unavailable"}</p>
+                        </div>
+                        <div className="max-w-xl text-sm leading-relaxed">
+                          <p className="font-medium text-foreground">Health Advice</p>
+                          <p className="text-muted-foreground">{tomorrow.health_advice || "-"}</p>
+                          <p className="mt-3 font-medium text-foreground">Prediction Explanation</p>
+                          <p className="text-muted-foreground">{tomorrow.explanation || "-"}</p>
+                        </div>
                       </div>
-                      <div className="rounded-md border border-border p-4">
-                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Health Advice</p>
-                        <p className="mt-2 text-sm leading-relaxed">{ai.health_advice}</p>
-                      </div>
-                      <div className="rounded-md border border-border p-4">
-                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Prediction Explanation</p>
-                        <p className="mt-2 text-sm leading-relaxed">{ai.explanation}</p>
-                      </div>
-                      <a href={`${API_BASE}/reports/prediction/${result.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-accent">
-                        <FileText size={14} /> Export PDF Report
-                      </a>
                     </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                      {forecast.slice(1).map((day) => (
+                        <div key={day.day} className="rounded-md border border-border p-4" style={{ borderLeft: `4px solid ${day.color}` }}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold">{day.label}</p>
+                              <p className="text-xs text-muted-foreground">{day.date}</p>
+                            </div>
+                            <p className="font-mono text-xl font-semibold">{Math.round(day.predicted_aqi)}</p>
+                          </div>
+                          <div className="mt-3 space-y-1 text-sm">
+                            <p><span className="text-muted-foreground">Category:</span> {day.category}</p>
+                            <p><span className="text-muted-foreground">Risk:</span> {day.risk}</p>
+                            <p><span className="text-muted-foreground">Weather:</span> {day.weather_summary}</p>
+                            <p><span className="text-muted-foreground">Confidence:</span> {day.confidence}%</p>
+                          </div>
+                          <p className="mt-3 text-sm text-muted-foreground">{day.health_advice}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <a href={`${API_BASE}/reports/prediction/${result.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-accent">
+                      <FileText size={14} /> Export PDF Report
+                    </a>
                   </div>
                 </div>
 
@@ -237,13 +255,13 @@ export default function Predict() {
                   <h3 className="font-display text-lg font-semibold">Model Info</h3>
                   <div className="mt-4 space-y-3 text-sm">
                     {[
-                      ["Model Name", ai.model_name],
+                      ["Model Name", aiForecast.model_name],
                       ["Algorithm", modelMetrics.algorithm],
                       ["Training Accuracy", modelMetrics.training_accuracy != null ? `${modelMetrics.training_accuracy}%` : "-"],
                       ["RMSE", modelMetrics.rmse],
                       ["MAE", modelMetrics.mae],
                       ["R2 Score", modelMetrics.r2_score],
-                      ["Model Version", modelMetrics.model_version],
+                      ["Model Version", aiForecast.model_version || modelMetrics.model_version],
                       ["Training Date", formatDate(modelMetrics.training_date)],
                     ].map(([label, value]) => (
                       <div key={label} className="flex justify-between gap-4 border-b border-border pb-2 last:border-0">
@@ -275,7 +293,7 @@ export default function Predict() {
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="font-display text-lg font-semibold flex items-center gap-2"><ChartLineUp size={16} /> 7-Day AQI Forecast</h3>
-                      <p className="text-sm text-muted-foreground">Trend-adjusted future predictions, not repeated from today.</p>
+                      <p className="text-sm text-muted-foreground">Future model outputs with confidence decreasing by forecast horizon.</p>
                     </div>
                   </div>
                   <div className="h-72 mt-4">
@@ -295,7 +313,7 @@ export default function Predict() {
           ) : (
             <div className="aq-card p-12 text-center text-muted-foreground">
               <MapPin size={32} className="mx-auto" />
-              <p className="mt-3 font-medium text-foreground">Select a location to start monitoring.</p>
+              <p className="mt-3 font-medium text-foreground">Select a location to generate a future AQI forecast.</p>
               <p className="text-sm">No CSV upload, dataset selection, or manual pollutant entry is required.</p>
             </div>
           )}

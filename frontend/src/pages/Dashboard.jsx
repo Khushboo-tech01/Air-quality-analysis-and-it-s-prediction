@@ -30,8 +30,8 @@ export default function Dashboard() {
   }, []);
 
   const today = new Date().toISOString().slice(0, 10);
-  const todaysPredictions = predictions.filter((p) => (p.date || p.created_at || "").slice(0, 10) === today).length;
-  const lastPrediction = predictions[0];
+  const todaysForecasts = predictions.filter((p) => (p.date || p.created_at || "").slice(0, 10) === today).length;
+  const lastForecast = predictions[0];
   const chartData = [...predictions].reverse().map((p, index) => ({ idx: index + 1, aqi: p.aqi }));
   const averageAqi = predictions.length
     ? Math.round(predictions.reduce((sum, item) => sum + Number(item.aqi || 0), 0) / predictions.length)
@@ -41,7 +41,7 @@ export default function Dashboard() {
     <>
       <PageHeader
         title={`Welcome back, ${user?.name?.split(" ")[0] || "there"}`}
-        subtitle="Your live AI air-quality monitoring workspace."
+        subtitle="Your live environmental monitoring and AI AQI forecasting workspace."
         actions={
           <Button asChild data-testid="dashboard-predict-btn">
             <Link to="/predict"><MapPin size={16} className="mr-1.5" /> Monitor Location</Link>
@@ -50,29 +50,29 @@ export default function Dashboard() {
       />
       <PageBody>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard label="Total Predictions" value={predictions.length} icon={Compass} testid="stat-predictions" />
-          <StatCard label="Today's Checks" value={todaysPredictions} icon={ChartLineUp} testid="stat-today-predictions" />
-          <StatCard label="Average AQI" value={averageAqi || "-"} icon={Gauge} testid="stat-average-aqi" />
+          <StatCard label="Total Forecasts" value={predictions.length} icon={Compass} testid="stat-predictions" />
+          <StatCard label="Today's Forecasts" value={todaysForecasts} icon={ChartLineUp} testid="stat-today-predictions" />
+          <StatCard label="Avg Tomorrow AQI" value={averageAqi || "-"} icon={Gauge} testid="stat-average-aqi" />
           <StatCard label="Production Model" value={modelInfo?.loaded ? "Loaded" : "Fallback"} icon={ShieldCheck} testid="stat-model-status" />
         </div>
 
         <div className="mt-4 aq-card p-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between" data-testid="stat-last-prediction">
           <div>
-            <p className="text-xs uppercase text-muted-foreground">Last AI Prediction</p>
+            <p className="text-xs uppercase text-muted-foreground">Last AI Forecast</p>
             <p className="font-display text-lg font-semibold">
-              {lastPrediction ? `${Math.round(lastPrediction.aqi)} AQI · ${lastPrediction.category}` : "No predictions yet"}
+              {lastForecast ? `${Math.round(lastForecast.aqi)} AQI - ${lastForecast.category}` : "No forecasts yet"}
             </p>
-            {lastPrediction && <p className="text-sm text-muted-foreground">{lastPrediction.location}</p>}
+            {lastForecast && <p className="text-sm text-muted-foreground">{lastForecast.location}</p>}
           </div>
-          {lastPrediction && <AQIBadge aqi={lastPrediction.aqi} />}
+          {lastForecast && <AQIBadge aqi={lastForecast.aqi} />}
         </div>
 
         <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 aq-card p-6" data-testid="chart-recent-predictions">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="font-display text-xl font-semibold">Recent AQI Predictions</h2>
-                <p className="text-sm text-muted-foreground">AQI trend across your latest monitored locations.</p>
+                <h2 className="font-display text-xl font-semibold">Recent AQI Forecasts</h2>
+                <p className="text-sm text-muted-foreground">Tomorrow AQI trend across your latest monitored locations.</p>
               </div>
               <Button variant="ghost" size="sm" asChild><Link to="/predict">Monitor</Link></Button>
             </div>
@@ -133,12 +133,12 @@ export default function Dashboard() {
             {loading ? (
               <div className="py-8 text-sm text-muted-foreground text-center">Loading...</div>
             ) : predictions.length === 0 ? (
-              <div className="py-8 text-sm text-muted-foreground text-center">Choose a location to create your first AI AQI prediction.</div>
+              <div className="py-8 text-sm text-muted-foreground text-center">Choose a location to create your first AI AQI forecast.</div>
             ) : predictions.slice(0, 8).map((prediction) => (
               <motion.div key={prediction.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center justify-between py-3">
                 <div className="min-w-0">
                   <div className="font-mono text-lg font-semibold" style={{ color: prediction.color }}>{Math.round(prediction.aqi)}</div>
-                  <div className="text-xs text-muted-foreground truncate">{prediction.location || "-"} · {prediction.model || "AI model"}</div>
+                  <div className="text-xs text-muted-foreground truncate">{prediction.location || "-"} - {prediction.model || "AI model"}</div>
                 </div>
                 <div className="flex items-center gap-3">
                   {prediction.confidence != null && <span className="hidden sm:inline-flex items-center gap-1 text-xs text-muted-foreground"><Pulse size={13} /> {prediction.confidence}%</span>}

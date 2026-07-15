@@ -33,9 +33,14 @@ async def fetch_environment(api_key: str, latitude: float, longitude: float) -> 
         "https://api.openweathermap.org/data/2.5/air_pollution?"
         f"lat={latitude}&lon={longitude}&appid={api_key}"
     )
-    weather, air = await asyncio.gather(
+    forecast_url = (
+        "https://api.openweathermap.org/data/2.5/forecast?"
+        f"lat={latitude}&lon={longitude}&units=metric&appid={api_key}"
+    )
+    weather, air, forecast = await asyncio.gather(
         _cached_json(f"weather:{latitude:.4f}:{longitude:.4f}", weather_url),
         _cached_json(f"air:{latitude:.4f}:{longitude:.4f}", air_url),
+        _cached_json(f"forecast:{latitude:.4f}:{longitude:.4f}", forecast_url),
     )
     air_entry = (air.get("list") or [{}])[0]
     components = air_entry.get("components") or {}
@@ -53,6 +58,7 @@ async def fetch_environment(api_key: str, latitude: float, longitude: float) -> 
             "humidity": weather.get("main", {}).get("humidity"),
             "pressure": weather.get("main", {}).get("pressure"),
             "wind": weather.get("wind", {}).get("speed"),
+            "visibility": weather.get("visibility"),
             "pm25": components.get("pm2_5"),
             "pm10": components.get("pm10"),
             "no2": components.get("no2"),
@@ -60,4 +66,5 @@ async def fetch_environment(api_key: str, latitude: float, longitude: float) -> 
             "co": components.get("co") / 1000 if components.get("co") is not None else None,
             "o3": components.get("o3"),
         },
+        "weather_forecast": forecast.get("list", []),
     }

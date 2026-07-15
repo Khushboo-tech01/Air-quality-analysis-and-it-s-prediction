@@ -28,11 +28,9 @@ from auth import (
     set_auth_cookies,
     verify_password,
 )
-from aqi_utils import classify_aqi
 from forecast_service import forecast_next_7_days
 from location_service import geocode_location, reverse_geocode
-from model_loader_service import load_production_model, model_status, predict_with_production_model
-from prediction_service import build_ai_prediction
+from model_loader_service import load_production_model, model_status
 from reports_service import build_prediction_pdf
 from weather_service import fetch_environment
 
@@ -237,23 +235,20 @@ async def predict_location(payload: LocationPredictIn, user=Depends(get_current_
         raise HTTPException(status_code=502, detail=f"Unable to fetch live environmental data: {exc}")
 
     features = {key: value for key, value in environment["measurements"].items() if value is not None}
-    prediction = predict_with_production_model(features)
-    aqi_info = classify_aqi(prediction["prediction"])
-    ai_prediction = build_ai_prediction(prediction, aqi_info, features)
     model_info = model_status()
     metrics = model_info.get("metrics") or {}
-    forecast = forecast_next_7_days(environment["measurements"])
+    forecast = forecast_next_7_days(environment["measurements"], environment.get("weather_forecast"))
+    tomorrow = forecast[0] if forecast else None
 
     official_aqi = environment.get("official_aqi")
     comparison = None
-    if official_aqi is not None:
-        difference = round(ai_prediction["predicted_aqi"] - float(official_aqi), 1)
+    if official_aqi is not None and tomorrow:
+        difference = round(float(tomorrow["predicted_aqi"]) - float(official_aqi), 1)
         comparison = {
             "official_aqi": official_aqi,
-            "predicted_aqi": ai_prediction["predicted_aqi"],
+            "tomorrow_predicted_aqi": tomorrow["predicted_aqi"],
             "difference": difference,
-            "prediction_error": abs(difference),
-            "note": "Informational only. Official AQI is not used to replace the ML prediction.",
+            "note": "Compares today's OpenWeather AQI index with tomorrow's model forecast. Values use different scales and are informational only.",
         }
 
     model_performance = {
@@ -270,17 +265,22 @@ async def predict_location(payload: LocationPredictIn, user=Depends(get_current_
         "features": features,
         "location": location_info["name"],
         "date": datetime.now(timezone.utc).date().isoformat(),
-        "aqi": ai_prediction["predicted_aqi"],
-        "predicted_aqi": ai_prediction["predicted_aqi"],
-        "category": ai_prediction["category"],
-        "color": ai_prediction["color"],
-        "advice": ai_prediction["health_advice"],
-        "health_advice": ai_prediction["health_advice"],
-        "risk_level": ai_prediction["risk_level"],
-        "explanation": ai_prediction["explanation"],
-        "model": ai_prediction["model_name"],
-        "confidence": ai_prediction["confidence"],
-        "ai_prediction": ai_prediction,
+        "aqi": tomorrow.get("predicted_aqi") if tomorrow else None,
+        "predicted_aqi": tomorrow.get("predicted_aqi") if tomorrow else None,
+        "category": tomorrow.get("category") if tomorrow else None,
+        "color": tomorrow.get("color") if tomorrow else None,
+        "advice": tomorrow.get("health_advice") if tomorrow else None,
+        "health_advice": tomorrow.get("health_advice") if tomorrow else None,
+        "risk_level": tomorrow.get("risk") if tomorrow else None,
+        "explanation": tomorrow.get("explanation") if tomorrow else None,
+        "model": model_info.get("model_name"),
+        "confidence": tomorrow.get("confidence") if tomorrow else None,
+        "ai_forecast": {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "model_name": model_info.get("model_name"),
+            "model_version": model_info.get("model_version"),
+            "days": forecast,
+        },
         "live_data": {"location": location_info, **environment},
         "model_performance": model_performance,
         "official_comparison": comparison,
@@ -337,7 +337,18 @@ async def prediction_report(prediction_id: str, user=Depends(get_current_user)):
             "location": prediction.get("location") or "-",
             "date": prediction.get("date") or "-",
             "inputs": prediction.get("features") or {},
+            "current_conditions": (prediction.get("live_data") or {}).get("measurements") or {},
             "forecast": prediction.get("forecast") or [],
+            "weather_summary": [
+                {
+                    "label": item.get("label"),
+                    "summary": item.get("weather_summary"),
+                    "temp": (item.get("weather") or {}).get("temp"),
+                    "wind": (item.get("weather") or {}).get("wind"),
+                    "rain": (item.get("weather") or {}).get("rain"),
+                }
+                for item in (prediction.get("forecast") or [])
+            ],
         },
         user["email"],
     )
