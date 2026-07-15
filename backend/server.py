@@ -29,6 +29,11 @@ from eda_service import (
     clean_dataset, feature_engineering_report,
 )
 from ml_service import train_all, predict_from_model, forecast_next_days, CANONICAL_FEATURES
+from prediction_service import build_ai_prediction, build_model_performance
+from model_loader_service import load_production_model, model_status, predict_with_production_model
+from location_service import geocode_location, reverse_geocode
+from weather_service import fetch_environment
+from forecast_service import forecast_next_7_days
 from reports_service import build_prediction_pdf, build_model_metrics_pdf
 from insights_service import generate_insight
 from sample_data import generate_sample_csv
@@ -61,7 +66,8 @@ async def _startup():
     await db.predictions.create_index("user_id")
     await db.login_attempts.create_index("identifier")
     await seed_admin(db)
-    logger.info("Startup complete — admin seeded, indexes ensured.")
+    loaded_model = load_production_model()
+    logger.info("Startup complete — admin seeded, indexes ensured, production model loaded=%s.", bool(loaded_model))
 
 
 @app.on_event("shutdown")
@@ -222,6 +228,7 @@ async def delete_account(response: Response, user=Depends(get_current_user)):
 # ────────────────────────────────────────────────────────────────────────────
 @api.post("/datasets/upload")
 async def upload_dataset(file: UploadFile = File(...), user=Depends(get_current_user)):
+    raise HTTPException(status_code=410, detail="CSV uploads are no longer supported. Use location-based live AQI prediction.")
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only .csv files are supported")
     content = await file.read()
@@ -257,6 +264,7 @@ async def upload_dataset(file: UploadFile = File(...), user=Depends(get_current_
 @api.post("/datasets/seed-sample")
 async def seed_sample(user=Depends(get_current_user)):
     """Generate a synthetic Indian-cities dataset for this user."""
+    raise HTTPException(status_code=410, detail="Sample datasets are no longer supported. Use location-based live AQI prediction.")
     tmp_path = UPLOAD_DIR / f"sample_{user['id']}.csv"
     generate_sample_csv(tmp_path, days=180)
     df = pd.read_csv(tmp_path)
@@ -381,6 +389,7 @@ async def feature_eng(dataset_id: str, user=Depends(get_current_user)):
 # ────────────────────────────────────────────────────────────────────────────
 @api.post("/datasets/{dataset_id}/train")
 async def train(dataset_id: str, user=Depends(get_current_user)):
+    raise HTTPException(status_code=410, detail="User-triggered training is no longer supported. The production model is loaded automatically.")
     d = await db.datasets.find_one({"_id": _oid(dataset_id), "user_id": ObjectId(user["id"])})
     if not d:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -419,6 +428,100 @@ class PredictIn(BaseModel):
     features: Dict[str, float]
     location: Optional[str] = None
     date: Optional[str] = None
+    live_data: Optional[Dict[str, Any]] = None
+
+
+class LocationPredictIn(BaseModel):
+    country: Optional[str] = None
+    state: Optional[str] = None
+    city: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+def _openweather_key() -> str:
+    key = os.environ.get("OPENWEATHER_API_KEY") or os.environ.get("REACT_APP_OPENWEATHER_API_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="OPENWEATHER_API_KEY is not configured on the backend.")
+    return key
+
+
+@api.get("/model/production")
+async def production_model_info(user=Depends(get_current_user)):
+    return model_status()
+
+
+@api.post("/predict/location")
+async def predict_location(payload: LocationPredictIn, user=Depends(get_current_user)):
+    api_key = _openweather_key()
+    try:
+        if payload.latitude is not None and payload.longitude is not None:
+            location_info = await reverse_geocode(api_key, payload.latitude, payload.longitude)
+        elif payload.country and payload.city:
+            location_info = await geocode_location(api_key, payload.country, payload.city, payload.state)
+        else:
+            raise HTTPException(status_code=400, detail="Provide country and city, or latitude and longitude.")
+        environment = await fetch_environment(api_key, location_info["latitude"], location_info["longitude"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("OpenWeather lookup failed")
+        raise HTTPException(status_code=502, detail=f"Unable to fetch live environmental data: {e}")
+
+    features = {k: v for k, v in environment["measurements"].items() if v is not None}
+    pred = predict_with_production_model(features)
+    aqi_info = classify_aqi(pred["prediction"])
+    ai_prediction = build_ai_prediction(pred, aqi_info, features)
+    model_info = model_status()
+    model_performance = {
+        "algorithm": model_info.get("model_name"),
+        "training_accuracy": round(max(0.0, float(model_info.get("metrics", {}).get("r2", 0.0))) * 100, 1) if model_info.get("metrics") else None,
+        "rmse": model_info.get("metrics", {}).get("rmse"),
+        "mae": model_info.get("metrics", {}).get("mae"),
+        "r2_score": model_info.get("metrics", {}).get("r2"),
+        "model_version": model_info.get("model_version"),
+        "training_date": model_info.get("trained_at"),
+    }
+    forecast = forecast_next_7_days(environment["measurements"])
+    official_aqi = environment.get("official_aqi")
+    comparison = None
+    if official_aqi is not None:
+        difference = round(ai_prediction["predicted_aqi"] - float(official_aqi), 1)
+        comparison = {
+            "official_aqi": official_aqi,
+            "predicted_aqi": ai_prediction["predicted_aqi"],
+            "difference": difference,
+            "prediction_error": abs(difference),
+            "note": "Informational only. Official AQI is not used to replace the ML prediction.",
+        }
+
+    doc = {
+        "user_id": ObjectId(user["id"]),
+        "dataset_name": "Production live model",
+        "features": features,
+        "location": location_info["name"],
+        "date": datetime.now(timezone.utc).date().isoformat(),
+        "aqi": ai_prediction["predicted_aqi"],
+        "predicted_aqi": ai_prediction["predicted_aqi"],
+        "category": ai_prediction["category"],
+        "color": ai_prediction["color"],
+        "advice": ai_prediction["health_advice"],
+        "health_advice": ai_prediction["health_advice"],
+        "risk_level": ai_prediction["risk_level"],
+        "explanation": ai_prediction["explanation"],
+        "model": ai_prediction["model_name"],
+        "confidence": ai_prediction["confidence"],
+        "ai_prediction": ai_prediction,
+        "live_data": {"location": location_info, **environment},
+        "model_performance": model_performance,
+        "official_comparison": comparison,
+        "forecast": forecast,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = await db.predictions.insert_one(doc)
+    return {"id": str(result.inserted_id), **{k: v for k, v in doc.items() if k not in ("user_id", "_id")}}
 
 
 @api.post("/predict")
@@ -433,6 +536,21 @@ async def predict(payload: PredictIn, user=Depends(get_current_user)):
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
     aqi_info = classify_aqi(pred["prediction"])
+    ai_prediction = build_ai_prediction(pred, aqi_info, payload.features)
+    model_performance = build_model_performance(d, pred)
+    live_data = payload.live_data or None
+    official_aqi = live_data.get("official_aqi") if isinstance(live_data, dict) else None
+    comparison = None
+    if official_aqi is not None:
+        predicted = ai_prediction["predicted_aqi"]
+        difference = round(predicted - float(official_aqi), 1)
+        comparison = {
+            "official_aqi": official_aqi,
+            "predicted_aqi": predicted,
+            "difference": difference,
+            "prediction_error": abs(difference),
+            "note": "Informational only. Official AQI is not used to replace the ML prediction.",
+        }
     doc = {
         "user_id": ObjectId(user["id"]),
         "dataset_id": ObjectId(payload.dataset_id),
@@ -440,12 +558,20 @@ async def predict(payload: PredictIn, user=Depends(get_current_user)):
         "features": payload.features,
         "location": payload.location,
         "date": payload.date,
-        "aqi": aqi_info["aqi"],
-        "category": aqi_info["category"],
-        "color": aqi_info["color"],
-        "advice": aqi_info["advice"],
+        "aqi": ai_prediction["predicted_aqi"],
+        "predicted_aqi": ai_prediction["predicted_aqi"],
+        "category": ai_prediction["category"],
+        "color": ai_prediction["color"],
+        "advice": ai_prediction["health_advice"],
+        "health_advice": ai_prediction["health_advice"],
+        "risk_level": ai_prediction["risk_level"],
+        "explanation": ai_prediction["explanation"],
         "model": pred["model"],
-        "confidence": round(max(0.0, min(100.0, 100.0 - float(pred.get("rmse", 0)))), 1),
+        "confidence": ai_prediction["confidence"],
+        "ai_prediction": ai_prediction,
+        "live_data": live_data,
+        "model_performance": model_performance,
+        "official_comparison": comparison,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await db.predictions.insert_one(doc)

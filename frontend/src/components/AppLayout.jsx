@@ -2,16 +2,14 @@ import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
-  House, UploadSimple, Brain, Compass, FileText, Wind,
+  House, Compass, FileText, Wind,
   Sun, Moon, User, SignOut,
 } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard",   icon: House,        testid: "nav-dashboard" },
-  { to: "/upload",    label: "Datasets",    icon: UploadSimple, testid: "nav-datasets" },
-  { to: "/train",     label: "Train Models",icon: Brain,        testid: "nav-train" },
-  { to: "/predict",   label: "Predict AQI", icon: Compass,      testid: "nav-predict" },
+  { to: "/predict",   label: "Live Monitor", icon: Compass,      testid: "nav-predict" },
   { to: "/reports",   label: "Reports",     icon: FileText,     testid: "nav-reports" },
 ];
 

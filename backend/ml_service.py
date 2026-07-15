@@ -3,6 +3,7 @@ import time
 import pickle
 from pathlib import Path
 from typing import Dict, List
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -106,11 +107,20 @@ def train_all(csv_path: str, dataset_id: str) -> Dict:
     # Best model by highest R²
     best = max(results, key=lambda r: r["r2"])
     best_model = trained_models[best["name"]]
+    best_test_predictions = best_model.predict(X_test)
+    residual_std = float(np.std(y_test.to_numpy() - best_test_predictions))
     artifact = {
         "model": best_model,
         "feature_keys": feature_keys,
         "means": means,
+        "stds": {k: float(X[k].std()) if float(X[k].std() or 0) > 0 else 1.0 for k in feature_keys},
         "best_name": best["name"],
+        "best_metrics": best,
+        "dataset_rows": int(len(X)),
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "model_version": f"{dataset_id[:8]}-{int(time.time())}",
+        "residual_std": residual_std,
+        "target_std": float(y.std()) if float(y.std() or 0) > 0 else 1.0,
         "schema": schema,
     }
     path = MODELS_DIR / f"{dataset_id}.pkl"
@@ -134,16 +144,41 @@ def predict_from_model(dataset_id: str, feature_input: Dict[str, float]) -> Dict
         art = pickle.load(f)
     keys: List[str] = art["feature_keys"]
     means: Dict[str, float] = art["means"]
+    stds: Dict[str, float] = art.get("stds", {})
     row = [float(feature_input.get(k, means.get(k, 0.0))) for k in keys]
     x = pd.DataFrame([row], columns=keys)
     pred = float(art["model"].predict(x)[0])
     pred = max(0.0, min(500.0, pred))
-    # crude confidence: 1 - normalized R² gap … use ~0.9 fallback
-    return {"prediction": pred, "model": art["best_name"], "features_used": keys}
+    metrics = art.get("best_metrics", {})
+    r2_confidence = max(0.0, min(1.0, float(metrics.get("r2", 0.0))))
+    z_scores = [
+        abs(float(x.iloc[0][k]) - float(means.get(k, 0.0))) / max(float(stds.get(k, 1.0)), 1e-6)
+        for k in keys
+    ]
+    drift_penalty = min(0.35, float(np.mean(z_scores)) * 0.08) if z_scores else 0.0
+    interval_penalty = min(
+        0.25,
+        float(art.get("residual_std", 0.0)) / max(float(art.get("target_std", 1.0)), 1e-6) * 0.15,
+    )
+    confidence = max(0.0, min(0.99, r2_confidence - drift_penalty - interval_penalty))
+    return {
+        "prediction": pred,
+        "model": art["best_name"],
+        "features_used": keys,
+        "confidence": round(confidence * 100, 1),
+        "metrics": metrics,
+        "model_version": art.get("model_version"),
+        "trained_at": art.get("trained_at"),
+        "dataset_rows": art.get("dataset_rows"),
+        "prediction_interval": {
+            "low": round(max(0.0, pred - 1.96 * float(art.get("residual_std", 0.0))), 1),
+            "high": round(min(500.0, pred + 1.96 * float(art.get("residual_std", 0.0))), 1),
+        },
+    }
 
 
 def forecast_next_days(dataset_id: str, csv_path: str, days: int = 7) -> List[Dict]:
-    """Naive forecast: use last known feature values, jitter slightly to simulate variability."""
+    """Forecast future AQI from trend-adjusted pollutant projections."""
     path = MODELS_DIR / f"{dataset_id}.pkl"
     if not path.exists():
         raise FileNotFoundError("Model not trained yet for this dataset")
@@ -155,22 +190,31 @@ def forecast_next_days(dataset_id: str, csv_path: str, days: int = 7) -> List[Di
     keys = art["feature_keys"]
     means = art["means"]
 
-    # Get last row of pollutant values
     last_values: Dict[str, float] = {}
+    trend_values: Dict[str, float] = {}
     for k in keys:
         col = schema["features"].get(k)
         if col and col in df.columns:
             series = pd.to_numeric(df[col], errors="coerce").dropna()
             last_values[k] = float(series.iloc[-1]) if not series.empty else means.get(k, 0.0)
+            if len(series) >= 7:
+                recent = series.tail(7).to_numpy()
+                trend_values[k] = float((recent[-1] - recent[0]) / max(len(recent) - 1, 1))
+            else:
+                trend_values[k] = 0.0
         else:
             last_values[k] = means.get(k, 0.0)
+            trend_values[k] = 0.0
 
     rng = np.random.default_rng(42)
     forecasts = []
-    for i in range(days):
-        jitter = {k: last_values[k] * (1 + rng.normal(0, 0.05)) for k in keys}
-        x = pd.DataFrame([[jitter[k] for k in keys]], columns=keys)
+    for i in range(1, days + 1):
+        projected = {
+            k: max(0.0, last_values[k] + trend_values[k] * i + last_values[k] * rng.normal(0, 0.025))
+            for k in keys
+        }
+        x = pd.DataFrame([[projected[k] for k in keys]], columns=keys)
         pred = float(art["model"].predict(x)[0])
         pred = max(0.0, min(500.0, pred))
-        forecasts.append({"day": i + 1, "aqi": round(pred, 1)})
+        forecasts.append({"day": i, "aqi": round(pred, 1), "features": {k: round(v, 3) for k, v in projected.items()}})
     return forecasts

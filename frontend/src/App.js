@@ -6,9 +6,6 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import { Toaster } from "sonner";
 
 import Dashboard     from "@/pages/Dashboard";
-import Upload        from "@/pages/Upload";
-import DatasetDetail from "@/pages/DatasetDetail";
-import Train         from "@/pages/Train";
 import Predict       from "@/pages/Predict";
 import Reports       from "@/pages/Reports";
 import Admin         from "@/pages/Admin";
@@ -50,9 +47,9 @@ export default function App() {
               <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
                 <Route path="/dashboard"    element={<Dashboard />} />
-                <Route path="/upload"       element={<Upload />} />
-                <Route path="/dataset/:id"  element={<DatasetDetail />} />
-                <Route path="/train"        element={<Train />} />
+                <Route path="/upload"       element={<Navigate to="/predict" replace />} />
+                <Route path="/dataset/:id"  element={<Navigate to="/predict" replace />} />
+                <Route path="/train"        element={<Navigate to="/predict" replace />} />
                 <Route path="/predict"      element={<Predict />} />
                 <Route path="/reports"      element={<Reports />} />
                 <Route path="/admin"        element={<Admin />} />

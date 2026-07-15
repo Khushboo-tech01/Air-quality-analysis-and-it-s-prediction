@@ -20,6 +20,19 @@ def classify_aqi(aqi: float) -> Dict:
     return {"aqi": round(aqi, 1), "category": "Hazardous", "color": "#7F1D1D", "advice": AQI_CATEGORIES[-1]["advice"]}
 
 
+def health_advice_for_category(category: str) -> Dict:
+    normalized = (category or "").lower()
+    if normalized == "good":
+        return {"risk_level": "Low", "advice": "Enjoy outdoor activities."}
+    if normalized == "moderate":
+        return {"risk_level": "Moderate", "advice": "Sensitive people should reduce prolonged outdoor exposure."}
+    if "sensitive" in normalized or normalized == "unhealthy":
+        return {"risk_level": "Poor", "advice": "Wear masks and limit outdoor exercise."}
+    if "very" in normalized:
+        return {"risk_level": "Very Poor", "advice": "Avoid outdoor activity."}
+    return {"risk_level": "Hazardous", "advice": "Stay indoors and use air purifiers."}
+
+
 # EPA breakpoints for computing AQI sub-index from PM2.5 (24-hr avg, µg/m³)
 _PM25_BP: List[Tuple[float, float, float, float]] = [
     (0.0, 12.0, 0, 50),
