@@ -80,7 +80,16 @@ def _project_pollutants(current: Dict[str, float], weather: Dict, day: int) -> D
     return projected
 
 
-def _explain(day_label: str, info: Dict, current: Dict, projected: Dict) -> str:
+def _explain(day_label: str, info: Dict, current: Dict, projected: Dict, contributions: List[Dict] | None = None) -> str:
+    if contributions:
+        phrases = []
+        for item in contributions[:3]:
+            feature = str(item.get("feature", "")).upper()
+            value = float(item.get("contribution") or 0)
+            verb = "increased" if value >= 0 else "reduced"
+            phrases.append(f"{feature} {verb} the forecast by {abs(value):.1f} AQI")
+        if phrases:
+            return f"{day_label}'s AQI is expected to be {info['category']}. " + "; ".join(phrases) + "."
     reasons = []
     if projected.get("wind", 0) < float(current.get("wind") or 0):
         reasons.append("wind speed is forecast to decrease")
@@ -99,7 +108,7 @@ def forecast_next_7_days(measurements: Dict[str, float], weather_forecast: List[
     today = datetime.now(timezone.utc).date()
     weather_days = _daily_weather(weather_forecast or [])
     rows = []
-    confidence_schedule = [95, 92, 89, 85, 82, 79, 75]
+    confidence_schedule = [95, 92, 89, 86, 83, 80, 77]
     for day in range(1, 8):
         weather = weather_days[day - 1] if day - 1 < len(weather_days) else {
             "date": (today + timedelta(days=day)).isoformat(),
@@ -116,8 +125,10 @@ def forecast_next_7_days(measurements: Dict[str, float], weather_forecast: List[
         info = classify_aqi(prediction["prediction"])
         advice = health_advice_for_category(info["category"])
         model_confidence = float(prediction.get("confidence") or confidence_schedule[day - 1])
-        confidence = max(75.0, min(float(confidence_schedule[day - 1]), model_confidence))
+        weather_uncertainty = min(8.0, float(weather.get("rain") or 0) * 0.08 + max(0.0, 2.0 - float(weather.get("wind") or 2.0)) * 0.8)
+        confidence = max(60.0, min(float(confidence_schedule[day - 1]), model_confidence) - weather_uncertainty)
         day_label = "Tomorrow" if day == 1 else f"Day {day}"
+        contributions = prediction.get("feature_contributions", [])
         rows.append({
             "day": day,
             "label": day_label,
@@ -129,7 +140,9 @@ def forecast_next_7_days(measurements: Dict[str, float], weather_forecast: List[
             "risk": advice["risk_level"],
             "confidence": round(confidence, 1),
             "health_advice": advice["advice"],
-            "explanation": _explain(day_label, info, measurements, projected),
+            "explanation": _explain(day_label, info, measurements, projected, contributions),
+            "feature_importance": prediction.get("feature_importance", []),
+            "feature_contributions": contributions,
             "weather_summary": weather.get("summary"),
             "weather": weather,
             "features": projected,

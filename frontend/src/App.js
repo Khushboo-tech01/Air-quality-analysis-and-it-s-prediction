@@ -9,6 +9,7 @@ import Dashboard     from "@/pages/Dashboard";
 import Predict       from "@/pages/Predict";
 import Forecast      from "@/pages/Forecast";
 import Reports       from "@/pages/Reports";
+import AdminML       from "@/pages/AdminML";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import Account from "@/pages/Account";
@@ -50,6 +51,7 @@ export default function App() {
                 <Route path="/predict"      element={<Predict />} />
                 <Route path="/forecast"     element={<Forecast />} />
                 <Route path="/reports"      element={<Reports />} />
+                <Route path="/admin/ml"     element={<AdminML />} />
                 <Route path="/account"      element={<Account />} />
               </Route>
               </Route>

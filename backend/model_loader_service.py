@@ -8,6 +8,7 @@ import pandas as pd
 
 MODELS_DIR = Path(__file__).resolve().parent / "models"
 PRODUCTION_MODEL_PATH = MODELS_DIR / "final_model.pkl"
+BEST_MODEL_PATH = MODELS_DIR / "best_model.pkl"
 
 _MODEL_ARTIFACT: Optional[Dict] = None
 _MODEL_PATH: Optional[Path] = None
@@ -15,7 +16,7 @@ _MODEL_PATH: Optional[Path] = None
 
 def load_production_model() -> Optional[Dict]:
     global _MODEL_ARTIFACT, _MODEL_PATH
-    candidates = [PRODUCTION_MODEL_PATH]
+    candidates = [BEST_MODEL_PATH, PRODUCTION_MODEL_PATH]
     candidates.extend(sorted(MODELS_DIR.glob("*.pkl"), key=lambda p: p.stat().st_mtime, reverse=True))
     for path in candidates:
         if path.exists():
@@ -39,6 +40,8 @@ def model_status() -> Dict:
         "trained_at": _MODEL_ARTIFACT.get("trained_at"),
         "metrics": _MODEL_ARTIFACT.get("best_metrics", {}),
         "dataset_rows": _MODEL_ARTIFACT.get("dataset_rows"),
+        "feature_importance": _MODEL_ARTIFACT.get("feature_importance", []),
+        "git_commit": _MODEL_ARTIFACT.get("git_commit"),
     }
 
 
@@ -71,6 +74,8 @@ def predict_with_production_model(features: Dict[str, float]) -> Dict:
         "model_version": model_status().get("model_version"),
         "trained_at": _MODEL_ARTIFACT.get("trained_at"),
         "dataset_rows": _MODEL_ARTIFACT.get("dataset_rows"),
+        "feature_importance": _MODEL_ARTIFACT.get("feature_importance", []),
+        "feature_contributions": _feature_contributions(features, keys, means),
     }
 
 
@@ -92,4 +97,39 @@ def _fallback_prediction(features: Dict[str, float]) -> Dict:
         "model_version": "fallback",
         "trained_at": None,
         "dataset_rows": None,
+        "feature_importance": _fallback_importance(),
+        "feature_contributions": _fallback_contributions(features),
     }
+
+
+def _feature_contributions(features: Dict[str, float], keys, means: Dict[str, float]) -> list[Dict]:
+    contributions = []
+    for key in keys:
+        current = float(features.get(key) or 0.0)
+        baseline = float(means.get(key, 0.0) or 0.0)
+        if key in {"pm25", "pm10", "no2", "so2", "co", "o3"}:
+            direction = 1
+            weight = {"pm25": 1.8, "pm10": 0.75, "no2": 0.5, "o3": 0.45, "so2": 0.35, "co": 12}.get(key, 0.2)
+        elif key in {"wind", "rain"}:
+            direction = -1
+            weight = {"wind": 3.0, "rain": 1.2}.get(key, 1.0)
+        elif key == "humidity":
+            direction = 1 if current > 65 else -1
+            weight = 0.25
+        else:
+            direction = 1 if current > baseline else -1
+            weight = 0.08
+        contribution = direction * (current - baseline) * weight
+        if abs(contribution) >= 0.25:
+            contributions.append({"feature": key, "contribution": round(float(contribution), 2)})
+    return sorted(contributions, key=lambda item: abs(item["contribution"]), reverse=True)[:8]
+
+
+def _fallback_importance() -> list[Dict]:
+    weights = {"pm25": 0.32, "pm10": 0.24, "no2": 0.12, "o3": 0.1, "co": 0.08, "wind": 0.07, "humidity": 0.04, "so2": 0.03}
+    return [{"feature": key, "importance": value} for key, value in weights.items()]
+
+
+def _fallback_contributions(features: Dict[str, float]) -> list[Dict]:
+    baseline = {"pm25": 35, "pm10": 80, "no2": 25, "o3": 45, "co": 0.7, "wind": 3, "humidity": 60, "so2": 8}
+    return _feature_contributions(features, baseline.keys(), baseline)

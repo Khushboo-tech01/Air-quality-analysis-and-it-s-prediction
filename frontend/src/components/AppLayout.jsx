@@ -3,7 +3,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
   House, Compass, FileText, Wind, ChartLineUp,
-  Sun, Moon, User, SignOut,
+  Sun, Moon, User, SignOut, Database,
 } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 
@@ -13,6 +13,10 @@ const NAV = [
   { to: "/forecast",  label: "Forecast",    icon: ChartLineUp,  testid: "nav-forecast" },
   { to: "/reports",   label: "Reports",     icon: FileText,     testid: "nav-reports" },
   { to: "/account",   label: "Profile",     icon: User,         testid: "nav-profile" },
+];
+
+const ADMIN_NAV = [
+  { to: "/admin/ml", label: "ML Ops", icon: Database, testid: "nav-admin-ml" },
 ];
 
 export default function AppLayout() {
@@ -34,6 +38,21 @@ export default function AppLayout() {
         </Link>
         <nav className="flex-1 p-3 space-y-1">
           {NAV.map((n) => (
+            <NavLink
+              key={n.to}
+              to={n.to}
+              data-testid={n.testid}
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+                  isActive ? "bg-primary/10 text-primary font-semibold" : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                }`
+              }
+            >
+              <n.icon size={18} weight="regular" />
+              {n.label}
+            </NavLink>
+          ))}
+          {user?.role === "admin" && ADMIN_NAV.map((n) => (
             <NavLink
               key={n.to}
               to={n.to}

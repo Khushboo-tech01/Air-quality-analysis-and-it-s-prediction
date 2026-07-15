@@ -8,6 +8,7 @@ load_dotenv(ROOT_DIR / ".env")
 import io
 import logging
 import os
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -32,6 +33,8 @@ from forecast_service import forecast_next_7_days
 from location_service import geocode_location, reverse_geocode
 from model_loader_service import load_production_model, model_status
 from reports_service import build_prediction_pdf
+from services.data_collector import collect_historical_data
+from services.training_service import dataset_statistics, feature_importance, latest_model_metrics, train_production_model, training_history, training_status
 from weather_service import fetch_environment
 
 mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
@@ -43,20 +46,40 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 
 app = FastAPI(title="AeroPulse API", version="2.0.0")
 api = APIRouter(prefix="/api")
+_retraining_task = None
+
+
+async def _weekly_retraining_loop():
+    interval_seconds = int(os.environ.get("RETRAIN_INTERVAL_SECONDS", str(7 * 24 * 60 * 60)))
+    collect_days = int(os.environ.get("RETRAIN_COLLECT_DAYS", "30"))
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            logger.info("Scheduled ML refresh started.")
+            await collect_historical_data(db, days=collect_days)
+            await train_production_model(db, replace_only_if_better=True)
+            logger.info("Scheduled ML refresh completed.")
+        except Exception:
+            logger.exception("Scheduled ML refresh failed.")
 
 
 @app.on_event("startup")
 async def _startup():
+    global _retraining_task
     await db.users.create_index("email", unique=True)
     await db.predictions.create_index("user_id")
     await db.login_attempts.create_index("identifier")
     await seed_admin(db)
     loaded_model = load_production_model()
+    if os.environ.get("DISABLE_SCHEDULED_RETRAINING", "false").lower() not in {"1", "true", "yes"}:
+        _retraining_task = asyncio.create_task(_weekly_retraining_loop())
     logger.info("Startup complete; production model loaded=%s.", bool(loaded_model))
 
 
 @app.on_event("shutdown")
 async def _shutdown():
+    if _retraining_task:
+        _retraining_task.cancel()
     client.close()
 
 
@@ -112,6 +135,15 @@ class LocationPredictIn(BaseModel):
     city: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+
+
+class CollectDataIn(BaseModel):
+    days: int = Field(default=90, ge=7, le=730)
+
+
+def _require_admin(user: Dict[str, Any]):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
 
 
 @api.post("/auth/register")
@@ -257,8 +289,11 @@ async def predict_location(payload: LocationPredictIn, user=Depends(get_current_
         "rmse": metrics.get("rmse"),
         "mae": metrics.get("mae"),
         "r2_score": metrics.get("r2"),
+        "mape": metrics.get("mape"),
         "model_version": model_info.get("model_version"),
         "training_date": model_info.get("trained_at"),
+        "dataset_size": model_info.get("dataset_rows"),
+        "feature_importance": model_info.get("feature_importance", []),
     }
     doc = {
         "user_id": ObjectId(user["id"]),
@@ -339,6 +374,8 @@ async def prediction_report(prediction_id: str, user=Depends(get_current_user)):
             "inputs": prediction.get("features") or {},
             "current_conditions": (prediction.get("live_data") or {}).get("measurements") or {},
             "forecast": prediction.get("forecast") or [],
+            "model_metrics": prediction.get("model_performance") or {},
+            "feature_importance": ((prediction.get("forecast") or [{}])[0] or {}).get("feature_importance", []),
             "weather_summary": [
                 {
                     "label": item.get("label"),
@@ -361,6 +398,7 @@ async def prediction_report(prediction_id: str, user=Depends(get_current_user)):
 
 @api.get("/admin/analytics")
 async def admin_analytics(user=Depends(get_current_user)):
+    _require_admin(user)
     users_total = await db.users.count_documents({})
     predictions_total = await db.predictions.count_documents({})
     cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
@@ -380,8 +418,82 @@ async def admin_analytics(user=Depends(get_current_user)):
     }
 
 
+@api.post("/admin/collect-data")
+async def admin_collect_data(payload: CollectDataIn, user=Depends(get_current_user)):
+    _require_admin(user)
+    try:
+        return await collect_historical_data(db, days=payload.days)
+    except Exception as exc:
+        logger.exception("Automated data collection failed")
+        await db.training_logs.insert_one({
+            "type": "collection",
+            "status": "failed",
+            "error": str(exc),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        raise HTTPException(status_code=500, detail=f"Data collection failed: {exc}")
+
+
+@api.post("/admin/train-model")
+async def admin_train_model(user=Depends(get_current_user)):
+    _require_admin(user)
+    try:
+        return await train_production_model(db)
+    except Exception as exc:
+        logger.exception("Automated model training failed")
+        await db.training_logs.insert_one({
+            "type": "training",
+            "status": "failed",
+            "error": str(exc),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        raise HTTPException(status_code=500, detail=f"Model training failed: {exc}")
+
+
+@api.get("/admin/model-metrics")
+async def admin_model_metrics(user=Depends(get_current_user)):
+    _require_admin(user)
+    return await latest_model_metrics(db)
+
+
+@api.get("/admin/training-history")
+async def admin_training_history(user=Depends(get_current_user)):
+    _require_admin(user)
+    return await training_history(db)
+
+
+@api.get("/admin/training-status")
+async def admin_training_status(user=Depends(get_current_user)):
+    _require_admin(user)
+    return await training_status(db)
+
+
+@api.get("/admin/dataset-statistics")
+async def admin_dataset_statistics(user=Depends(get_current_user)):
+    _require_admin(user)
+    return await dataset_statistics(db)
+
+
+@api.get("/admin/feature-importance")
+async def admin_feature_importance(user=Depends(get_current_user)):
+    _require_admin(user)
+    return await feature_importance(db)
+
+
+@api.get("/admin/model-versions")
+async def admin_model_versions(user=Depends(get_current_user)):
+    _require_admin(user)
+    rows = []
+    cursor = db.model_versions.find({}).sort("training_date", -1).limit(50)
+    async for row in cursor:
+        row = _serialize(row)
+        rows.append(row)
+    return rows
+
+
 @api.get("/admin/predictions")
 async def admin_predictions(user=Depends(get_current_user)):
+    _require_admin(user)
     cursor = db.predictions.find({}).sort("created_at", -1).limit(200)
     items = []
     async for prediction in cursor:
