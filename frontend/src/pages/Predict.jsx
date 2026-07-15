@@ -15,7 +15,29 @@ const REFRESH_MS = 7 * 60 * 1000;
 function formatDate(value, seconds = false) {
   if (!value) return "-";
   const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: seconds ? "medium" : "short" });
+}
+
+function safeNumber(value, fallback = 0) {
+  if (value == null || value === "") return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function formatRounded(value, fallback = "-") {
+  if (value == null || value === "") return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number) : fallback;
+}
+
+function hasFiniteNumber(value) {
+  if (value == null || value === "") return false;
+  return Number.isFinite(Number(value));
+}
+
+function formatValue(value, suffix = "") {
+  return value != null && value !== "" ? `${value}${suffix}` : "-";
 }
 
 function InfoCard({ label, value, icon: Icon = Pulse }) {
@@ -56,12 +78,32 @@ export default function Predict() {
   const aiForecast = result?.ai_forecast || {};
   const live = result?.live_data || {};
   const modelMetrics = result?.model_performance || {};
-  const forecast = result?.forecast || aiForecast.days || [];
-  const tomorrow = forecast[0] || {};
+  const forecast = useMemo(
+    () => (result?.forecast?.length ? result.forecast : result?.ai_forecast?.days || []),
+    [result]
+  );
+  const tomorrow = forecast?.[0];
+  const predictedAQI = tomorrow?.predicted_aqi ?? 0;
+  const coordinates =
+    live.location?.latitude != null && live.location?.longitude != null
+      ? `${safeNumber(live.location.latitude).toFixed(4)}, ${safeNumber(live.location.longitude).toFixed(4)}`
+      : "-";
 
   const chartFeatures = useMemo(
-    () => POLLUTANT_ORDER.filter((key) => features[key] != null).map((key) => ({ name: POLLUTANT_META[key].label, value: Number(features[key]) })),
+    () =>
+      POLLUTANT_ORDER
+        .filter((key) => hasFiniteNumber(features?.[key]))
+        .map((key) => ({ name: POLLUTANT_META[key].label, value: safeNumber(features?.[key]) })),
     [features]
+  );
+
+  const forecastChartData = useMemo(
+    () =>
+      forecast.map((day) => ({
+        ...day,
+        aqi: safeNumber(day?.predicted_aqi ?? day?.aqi),
+      })),
+    [forecast]
   );
 
   const runPrediction = async (payload) => {
@@ -70,7 +112,8 @@ export default function Predict() {
       const { data } = await api.post("/predict/location", payload);
       setResult(data);
       setLastRequest(payload);
-      toast.success(`Tomorrow forecast: AQI ${Math.round(data.predicted_aqi)}`);
+      const tomorrowAqi = data?.forecast?.[0]?.predicted_aqi ?? data?.ai_forecast?.days?.[0]?.predicted_aqi ?? data?.predicted_aqi;
+      toast.success(`Tomorrow forecast: AQI ${formatRounded(tomorrowAqi, 0)}`);
     } catch (err) {
       toast.error(unwrapError(err));
     } finally {
@@ -185,15 +228,15 @@ export default function Predict() {
                 </div>
                 <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
                   <InfoCard label="Location" value={result.location} icon={MapPin} />
-                  <InfoCard label="Temperature" value={features.temp != null ? `${features.temp} C` : "-"} icon={ThermometerSimple} />
-                  <InfoCard label="Humidity" value={features.humidity != null ? `${features.humidity}%` : "-"} />
-                  <InfoCard label="Pressure" value={features.pressure != null ? `${features.pressure} hPa` : "-"} />
-                  <InfoCard label="Wind Speed" value={features.wind != null ? `${features.wind} m/s` : "-"} icon={Wind} />
-                  <InfoCard label="Visibility" value={features.visibility != null ? `${features.visibility} m` : "-"} />
-                  <InfoCard label="Weather" value={live.weather_condition} />
-                  <InfoCard label="Coordinates" value={`${live.location?.latitude?.toFixed(4)}, ${live.location?.longitude?.toFixed(4)}`} />
-                  <InfoCard label="Source" value={live.source} />
-                  <InfoCard label="Last Updated" value={formatDate(live.timestamp, true)} />
+                  <InfoCard label="Temperature" value={formatValue(features?.temp, " C")} icon={ThermometerSimple} />
+                  <InfoCard label="Humidity" value={formatValue(features?.humidity, "%")} />
+                  <InfoCard label="Pressure" value={formatValue(features?.pressure, " hPa")} />
+                  <InfoCard label="Wind Speed" value={formatValue(features?.wind, " m/s")} icon={Wind} />
+                  <InfoCard label="Visibility" value={formatValue(features?.visibility, " m")} />
+                  <InfoCard label="Weather" value={live?.weather_condition} />
+                  <InfoCard label="Coordinates" value={coordinates} />
+                  <InfoCard label="Source" value={live?.source} />
+                  <InfoCard label="Last Updated" value={formatDate(live?.timestamp, true)} />
                 </div>
                 <div className="mt-4">
                   <PollutantCards features={features} />
@@ -210,38 +253,39 @@ export default function Predict() {
                     <ChartLineUp size={22} className="text-muted-foreground" />
                   </div>
                   <div className="mt-6 space-y-4">
-                    <div className="rounded-md border border-border p-4" style={{ borderLeft: `4px solid ${tomorrow.color || "#2563EB"}` }}>
+                    <div className="rounded-md border border-border p-4" style={{ borderLeft: `4px solid ${tomorrow?.color || "#2563EB"}` }}>
                       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                         <div>
                           <p className="text-xs uppercase tracking-wide text-muted-foreground">Tomorrow</p>
-                          <p className="mt-1 text-3xl font-semibold">{tomorrow.predicted_aqi != null ? Math.round(tomorrow.predicted_aqi) : "-"}</p>
-                          <p className="text-sm text-muted-foreground">{tomorrow.category || "-"} - {tomorrow.confidence != null ? `${tomorrow.confidence}% confidence` : "confidence unavailable"}</p>
+                          <p className="mt-1 text-3xl font-semibold">{formatRounded(predictedAQI)}</p>
+                          <p className="text-sm text-muted-foreground">{tomorrow?.category || "-"} - {tomorrow?.confidence != null ? `${tomorrow.confidence}% confidence` : "confidence unavailable"}</p>
+                          <p className="text-sm text-muted-foreground">Risk: {tomorrow?.risk || "-"}</p>
                         </div>
                         <div className="max-w-xl text-sm leading-relaxed">
                           <p className="font-medium text-foreground">Health Advice</p>
-                          <p className="text-muted-foreground">{tomorrow.health_advice || "-"}</p>
+                          <p className="text-muted-foreground">{tomorrow?.health_advice || "-"}</p>
                           <p className="mt-3 font-medium text-foreground">Prediction Explanation</p>
-                          <p className="text-muted-foreground">{tomorrow.explanation || "-"}</p>
+                          <p className="text-muted-foreground">{tomorrow?.explanation || "-"}</p>
                         </div>
                       </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                       {forecast.slice(1).map((day) => (
-                        <div key={day.day} className="rounded-md border border-border p-4" style={{ borderLeft: `4px solid ${day.color}` }}>
+                        <div key={day?.day || day?.date} className="rounded-md border border-border p-4" style={{ borderLeft: `4px solid ${day?.color || "#2563EB"}` }}>
                           <div className="flex items-start justify-between gap-3">
                             <div>
-                              <p className="text-sm font-semibold">{day.label}</p>
-                              <p className="text-xs text-muted-foreground">{day.date}</p>
+                              <p className="text-sm font-semibold">{day?.label || "-"}</p>
+                              <p className="text-xs text-muted-foreground">{day?.date || "-"}</p>
                             </div>
-                            <p className="font-mono text-xl font-semibold">{Math.round(day.predicted_aqi)}</p>
+                            <p className="font-mono text-xl font-semibold">{formatRounded(day?.predicted_aqi)}</p>
                           </div>
                           <div className="mt-3 space-y-1 text-sm">
-                            <p><span className="text-muted-foreground">Category:</span> {day.category}</p>
-                            <p><span className="text-muted-foreground">Risk:</span> {day.risk}</p>
-                            <p><span className="text-muted-foreground">Weather:</span> {day.weather_summary}</p>
-                            <p><span className="text-muted-foreground">Confidence:</span> {day.confidence}%</p>
+                            <p><span className="text-muted-foreground">Category:</span> {day?.category || "-"}</p>
+                            <p><span className="text-muted-foreground">Risk:</span> {day?.risk || "-"}</p>
+                            <p><span className="text-muted-foreground">Weather:</span> {day?.weather_summary || "-"}</p>
+                            <p><span className="text-muted-foreground">Confidence:</span> {day?.confidence != null ? `${day.confidence}%` : "-"}</p>
                           </div>
-                          <p className="mt-3 text-sm text-muted-foreground">{day.health_advice}</p>
+                          <p className="mt-3 text-sm text-muted-foreground">{day?.health_advice || "-"}</p>
                         </div>
                       ))}
                     </div>
@@ -255,14 +299,13 @@ export default function Predict() {
                   <h3 className="font-display text-lg font-semibold">Model Info</h3>
                   <div className="mt-4 space-y-3 text-sm">
                     {[
-                      ["Model Name", aiForecast.model_name],
-                      ["Algorithm", modelMetrics.algorithm],
-                      ["Training Accuracy", modelMetrics.training_accuracy != null ? `${modelMetrics.training_accuracy}%` : "-"],
-                      ["RMSE", modelMetrics.rmse],
-                      ["MAE", modelMetrics.mae],
-                      ["R2 Score", modelMetrics.r2_score],
-                      ["Model Version", aiForecast.model_version || modelMetrics.model_version],
-                      ["Training Date", formatDate(modelMetrics.training_date)],
+                      ["Algorithm", modelMetrics?.algorithm],
+                      ["Model Version", modelMetrics?.model_version],
+                      ["Training Accuracy", modelMetrics?.training_accuracy != null ? `${modelMetrics.training_accuracy}%` : "-"],
+                      ["RMSE", modelMetrics?.rmse],
+                      ["MAE", modelMetrics?.mae],
+                      ["R2 Score", modelMetrics?.r2_score],
+                      ["Training Date", formatDate(modelMetrics?.training_date)],
                     ].map(([label, value]) => (
                       <div key={label} className="flex justify-between gap-4 border-b border-border pb-2 last:border-0">
                         <span className="text-muted-foreground">{label}</span>
@@ -298,7 +341,7 @@ export default function Predict() {
                   </div>
                   <div className="h-72 mt-4">
                     <ResponsiveContainer>
-                      <LineChart data={forecast}>
+                      <LineChart data={forecastChartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                         <XAxis dataKey="day" tickFormatter={(day) => `D${day}`} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} />
                         <YAxis tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} />
