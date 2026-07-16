@@ -35,6 +35,7 @@ from model_loader_service import load_production_model, model_status
 from reports_service import build_prediction_pdf
 from services.data_collector import collect_historical_data
 from services.training_service import dataset_statistics, feature_importance, latest_model_metrics, run_full_training_pipeline, train_production_model, training_history, training_report, training_status
+from waqi_service import fetch_waqi_environment
 from weather_service import fetch_environment
 
 mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
@@ -257,7 +258,27 @@ async def predict_location(payload: LocationPredictIn, user=Depends(get_current_
             location_info = await geocode_location(api_key, payload.country, payload.city, payload.state)
         else:
             raise HTTPException(status_code=400, detail="Provide country and city, or latitude and longitude.")
-        environment = await fetch_environment(api_key, location_info["latitude"], location_info["longitude"])
+        try:
+            environment = await fetch_waqi_environment(
+                city=location_info.get("city") or payload.city or location_info.get("name"),
+                latitude=location_info["latitude"],
+                longitude=location_info["longitude"],
+            )
+            logger.info("Using WAQI")
+            try:
+                openweather_environment = await fetch_environment(api_key, location_info["latitude"], location_info["longitude"])
+                environment["weather_forecast"] = openweather_environment.get("weather_forecast", [])
+                for key in ("sunrise", "sunset", "weather_condition", "timezone"):
+                    if environment.get(key) is None:
+                        environment[key] = openweather_environment.get(key)
+                for key in ("temp", "humidity", "pressure", "wind", "visibility"):
+                    if environment["measurements"].get(key) is None:
+                        environment["measurements"][key] = openweather_environment.get("measurements", {}).get(key)
+            except Exception as forecast_exc:
+                logger.warning("WAQI succeeded; OpenWeather forecast enrichment failed: %s", forecast_exc)
+        except Exception as waqi_exc:
+            logger.warning("Using OpenWeather fallback: %s", waqi_exc)
+            environment = await fetch_environment(api_key, location_info["latitude"], location_info["longitude"])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except HTTPException:
@@ -280,7 +301,7 @@ async def predict_location(payload: LocationPredictIn, user=Depends(get_current_
             "official_aqi": official_aqi,
             "tomorrow_predicted_aqi": tomorrow["predicted_aqi"],
             "difference": difference,
-            "note": "Compares today's OpenWeather AQI index with tomorrow's model forecast. Values use different scales and are informational only.",
+            "note": f"Compares today's {environment.get('source', 'live')} AQI with tomorrow's model forecast. Values may use different scales and are informational only.",
         }
 
     model_performance = {
