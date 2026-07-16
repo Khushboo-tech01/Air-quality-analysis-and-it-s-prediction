@@ -41,7 +41,7 @@ export default function Forecast() {
               </p>
             </div>
           </div>
-          <div className="h-80 mt-6">
+          <div className="mt-6 h-80 min-w-0">
             {loading ? (
               <div className="h-full grid place-items-center text-sm text-muted-foreground">Loading forecast...</div>
             ) : data.forecast.length ? (
@@ -66,7 +66,7 @@ export default function Forecast() {
         </div>
 
         {!loading && data.forecast.length ? (
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div className="aq-scrollbar mt-6 grid max-h-[560px] grid-cols-1 gap-4 overflow-y-auto overflow-x-hidden pr-1 md:grid-cols-2 xl:grid-cols-4">
             {data.forecast.map((day) => (
               <div key={day.day} className="rounded-md border border-border bg-card p-4" style={{ borderLeft: `4px solid ${day.color}` }}>
                 <div className="flex items-start justify-between gap-3">

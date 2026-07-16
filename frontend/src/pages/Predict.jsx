@@ -5,12 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import SearchableCombobox from "@/components/SearchableCombobox";
 import { POLLUTANT_META, POLLUTANT_ORDER } from "@/lib/aqi";
+import { cityOptions, countryOptions, stateOptions } from "@/lib/locations";
 import { ChartLineUp, Crosshair, Database, FileText, MapPin, Pulse, ThermometerSimple, Wind } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar } from "recharts";
 
 const REFRESH_MS = 7 * 60 * 1000;
+const LOCATION_STORAGE_KEY = "aeropulse:selected-location";
 
 function formatDate(value, seconds = false) {
   if (!value) return "-";
@@ -67,10 +70,18 @@ function PollutantCards({ features }) {
 }
 
 export default function Predict() {
-  const [location, setLocation] = useState({ country: "", state: "", city: "" });
+  const [location, setLocation] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(LOCATION_STORAGE_KEY)) || { country: "", state: "", city: "" };
+    } catch {
+      return { country: "", state: "", city: "" };
+    }
+  });
   const [coordinateText, setCoordinateText] = useState("");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStates, setLoadingStates] = useState(false);
+  const [loadingCities, setLoadingCities] = useState(false);
   const [lastRequest, setLastRequest] = useState(null);
   const [mode, setMode] = useState("place");
 
@@ -105,6 +116,27 @@ export default function Predict() {
       })),
     [forecast]
   );
+  const countries = useMemo(() => countryOptions(), []);
+  const states = useMemo(() => stateOptions(location.country), [location.country]);
+  const cities = useMemo(() => cityOptions(location.country, location.state), [location.country, location.state]);
+
+  useEffect(() => {
+    localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify(location));
+  }, [location]);
+
+  useEffect(() => {
+    if (!location.country) return undefined;
+    setLoadingStates(true);
+    const id = window.setTimeout(() => setLoadingStates(false), 180);
+    return () => window.clearTimeout(id);
+  }, [location.country]);
+
+  useEffect(() => {
+    if (!location.country) return undefined;
+    setLoadingCities(true);
+    const id = window.setTimeout(() => setLoadingCities(false), 180);
+    return () => window.clearTimeout(id);
+  }, [location.country, location.state]);
 
   const runPrediction = async (payload) => {
     setLoading(true);
@@ -177,16 +209,35 @@ export default function Predict() {
               {mode === "place" ? (
                 <form onSubmit={submitPlace} className="grid flex-1 grid-cols-1 gap-3 md:grid-cols-4">
                   <div>
-                    <Label>Country</Label>
-                    <Input className="mt-1.5" value={location.country} onChange={(e) => setLocation((v) => ({ ...v, country: e.target.value }))} placeholder="India" />
+                    <SearchableCombobox
+                      label="Country"
+                      value={location.country}
+                      options={countries}
+                      placeholder="Type to search..."
+                      onChange={(country) => setLocation((v) => ({ ...v, country, state: v.country === country ? v.state : "", city: v.country === country ? v.city : "" }))}
+                    />
                   </div>
                   <div>
-                    <Label>State</Label>
-                    <Input className="mt-1.5" value={location.state} onChange={(e) => setLocation((v) => ({ ...v, state: e.target.value }))} placeholder="Delhi" />
+                    <SearchableCombobox
+                      label="State"
+                      value={location.state}
+                      options={states}
+                      placeholder={location.country ? "Type to search..." : "Select a country first"}
+                      loading={loadingStates}
+                      disabled={!location.country}
+                      onChange={(state) => setLocation((v) => ({ ...v, state, city: v.state === state ? v.city : "" }))}
+                    />
                   </div>
                   <div>
-                    <Label>City</Label>
-                    <Input className="mt-1.5" value={location.city} onChange={(e) => setLocation((v) => ({ ...v, city: e.target.value }))} placeholder="New Delhi" />
+                    <SearchableCombobox
+                      label="City"
+                      value={location.city}
+                      options={cities}
+                      placeholder={location.country ? "Type to search..." : "Select a country first"}
+                      loading={loadingCities}
+                      disabled={!location.country}
+                      onChange={(city) => setLocation((v) => ({ ...v, city }))}
+                    />
                   </div>
                   <Button type="submit" size="lg" disabled={loading} className="self-end">
                     <MapPin size={16} className="mr-1.5" /> {loading ? "Forecasting..." : "Generate Forecast"}
@@ -269,7 +320,7 @@ export default function Predict() {
                         </div>
                       </div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    <div className="aq-scrollbar grid max-h-[520px] grid-cols-1 gap-3 overflow-y-auto overflow-x-hidden pr-1 md:grid-cols-2 xl:grid-cols-3">
                       {forecast.slice(1).map((day) => (
                         <div key={day?.day || day?.date} className="rounded-md border border-border p-4" style={{ borderLeft: `4px solid ${day?.color || "#2563EB"}` }}>
                           <div className="flex items-start justify-between gap-3">
