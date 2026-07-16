@@ -34,7 +34,7 @@ from location_service import geocode_location, reverse_geocode
 from model_loader_service import load_production_model, model_status
 from reports_service import build_prediction_pdf
 from services.data_collector import collect_historical_data
-from services.training_service import dataset_statistics, feature_importance, latest_model_metrics, train_production_model, training_history, training_report, training_status
+from services.training_service import dataset_statistics, feature_importance, latest_model_metrics, run_full_training_pipeline, train_production_model, training_history, training_report, training_status
 from weather_service import fetch_environment
 
 mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
@@ -448,6 +448,22 @@ async def admin_train_model(user=Depends(get_current_user)):
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         raise HTTPException(status_code=500, detail=f"Model training failed: {exc}")
+
+
+@api.post("/admin/retrain-pipeline")
+async def admin_retrain_pipeline(payload: CollectDataIn, user=Depends(get_current_user)):
+    _require_admin(user)
+    try:
+        return await run_full_training_pipeline(db, days=payload.days)
+    except Exception as exc:
+        logger.exception("Full ML pipeline failed")
+        await db.training_logs.insert_one({
+            "type": "full_pipeline",
+            "status": "failed",
+            "error": str(exc),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        raise HTTPException(status_code=500, detail=f"Full ML pipeline failed: {exc}")
 
 
 @api.get("/admin/model-metrics")

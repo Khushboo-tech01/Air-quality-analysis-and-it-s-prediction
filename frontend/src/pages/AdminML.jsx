@@ -75,7 +75,7 @@ export default function AdminML() {
     setBusy(name);
     try {
       await request();
-      toast.success(name === "collect" ? "Historical data collection completed." : "Model training completed.");
+      toast.success(name === "collect" ? "Historical data collection completed." : name === "pipeline" ? "Full ML pipeline completed." : "Model training completed.");
       await refresh();
     } catch (err) {
       toast.error(unwrapError(err));
@@ -128,6 +128,9 @@ export default function AdminML() {
               </Button>
               <Button className="w-full justify-start" variant="outline" disabled={!!busy} onClick={() => runAction("train", () => api.post("/admin/train-model"))}>
                 <Play size={16} className="mr-2" /> {busy === "train" ? "Training..." : "Train and Promote Best Model"}
+              </Button>
+              <Button className="w-full justify-start" variant="secondary" disabled={!!busy} onClick={() => runAction("pipeline", () => api.post("/admin/retrain-pipeline", { days: 730 }))}>
+                <RefreshCw size={16} className="mr-2" /> {busy === "pipeline" ? "Running..." : "Run Full ML Pipeline"}
               </Button>
               <div className="rounded-md border border-border p-3 text-sm">
                 <p className="text-muted-foreground">Latest status</p>

@@ -42,8 +42,12 @@ POLLUTANTS = {"pm25", "pm10", "no2", "so2", "co", "o3"}
 FEATURE_COLUMNS = [
     "pm25", "pm10", "no2", "so2", "co", "o3", "temp", "humidity", "pressure", "wind",
     "rain", "clouds", "visibility", "day", "month", "season", "weekend", "hour",
-    "temp_change", "humidity_trend", "wind_trend", "rolling_pm_average",
-    "rolling_aqi_average", "moving_pollutant_average",
+    "day_of_year", "wind_category", "rain_indicator", "temp_change", "humidity_trend",
+    "pressure_trend", "wind_trend", "pm25_lag_1", "pm10_lag_1", "no2_lag_1",
+    "o3_lag_1", "pm25_rolling_24h", "pm10_rolling_24h", "no2_rolling_24h",
+    "o3_rolling_24h", "rolling_pm_average", "moving_pollutant_average",
+    "pm25_pm10_ratio", "no2_o3_ratio", "pm25_humidity_interaction",
+    "pm10_wind_interaction", "o3_temp_interaction",
 ]
 
 
@@ -266,7 +270,7 @@ def _synthetic_records(location: Dict[str, Any], start: date, end: date) -> List
             "timezone": "Asia/Kolkata",
         }
         rows.append(row)
-        cursor += timedelta(hours=3)
+        cursor += timedelta(hours=1)
     return rows
 
 
@@ -288,8 +292,16 @@ def clean_records(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     frame[numeric] = frame.groupby("city")[numeric].transform(lambda group: group.ffill().bfill().fillna(group.median()))
     frame = frame.dropna(subset=["pm25", "pm10", "temp", "humidity", "pressure", "wind"])
     frame["aqi"] = frame.apply(lambda row: pollutants_to_aqi(row.to_dict(), standard="IN_AQI"), axis=1)
+    if "official_aqi" in frame:
+        frame["official_aqi"] = pd.to_numeric(frame["official_aqi"], errors="coerce")
+        valid_official = frame["official_aqi"].between(0, 500)
+        frame.loc[valid_official, "aqi"] = frame.loc[valid_official, "official_aqi"]
+    frame = frame[frame["aqi"].between(0, 500)]
     frame["aqi_standard"] = "IN_AQI"
-    frame["target_source"] = "computed_pollutant_max_subindex"
+    frame["target_source"] = frame.apply(
+        lambda row: "official_aqi" if pd.notna(row.get("official_aqi")) else "computed_pollutant_max_subindex",
+        axis=1,
+    )
     frame["timestamp"] = frame["timestamp"].dt.strftime("%Y-%m-%dT%H:%M:%S%z")
     return frame.to_dict("records")
 
@@ -306,12 +318,23 @@ def engineer_features(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     frame["season"] = frame["month"].map(_season)
     frame["weekend"] = frame["timestamp_dt"].dt.weekday.isin([5, 6]).astype(int)
     frame["hour"] = frame["timestamp_dt"].dt.hour
-    for source, target in [("temp", "temp_change"), ("humidity", "humidity_trend"), ("wind", "wind_trend")]:
+    frame["day_of_year"] = frame["timestamp_dt"].dt.dayofyear
+    frame["wind_category"] = pd.cut(frame["wind"], bins=[-0.1, 2, 5, 10, 100], labels=[0, 1, 2, 3]).astype(float)
+    frame["rain_indicator"] = (frame["rain"] > 0).astype(int)
+    for source, target in [("temp", "temp_change"), ("humidity", "humidity_trend"), ("pressure", "pressure_trend"), ("wind", "wind_trend")]:
         frame[target] = frame.groupby("city")[source].diff().fillna(0)
-    frame["rolling_pm_average"] = frame.groupby("city")["pm25"].transform(lambda s: s.rolling(8, min_periods=1).mean())
-    frame["rolling_aqi_average"] = frame.groupby("city")["aqi"].transform(lambda s: s.rolling(8, min_periods=1).mean())
+    for source, target in [("pm25", "pm25_lag_1"), ("pm10", "pm10_lag_1"), ("no2", "no2_lag_1"), ("o3", "o3_lag_1")]:
+        frame[target] = frame.groupby("city")[source].shift(1).fillna(frame[source])
+    for source, target in [("pm25", "pm25_rolling_24h"), ("pm10", "pm10_rolling_24h"), ("no2", "no2_rolling_24h"), ("o3", "o3_rolling_24h")]:
+        frame[target] = frame.groupby("city")[source].transform(lambda s: s.rolling(8, min_periods=1).mean())
+    frame["rolling_pm_average"] = frame[["pm25_rolling_24h", "pm10_rolling_24h"]].mean(axis=1)
     pollutant_cols = ["pm25", "pm10", "no2", "so2", "co", "o3"]
     frame["moving_pollutant_average"] = frame[pollutant_cols].mean(axis=1)
+    frame["pm25_pm10_ratio"] = frame["pm25"] / frame["pm10"].clip(lower=1e-6)
+    frame["no2_o3_ratio"] = frame["no2"] / frame["o3"].clip(lower=1e-6)
+    frame["pm25_humidity_interaction"] = frame["pm25"] * frame["humidity"] / 100
+    frame["pm10_wind_interaction"] = frame["pm10"] / (frame["wind"] + 1)
+    frame["o3_temp_interaction"] = frame["o3"] * frame["temp"]
     frame["timestamp"] = frame["timestamp_dt"].dt.strftime("%Y-%m-%dT%H:%M:%S%z")
     frame = frame.drop(columns=["timestamp_dt"])
     return frame.to_dict("records")

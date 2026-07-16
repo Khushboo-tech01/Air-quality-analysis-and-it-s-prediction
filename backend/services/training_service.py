@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import os
 import pickle
 import subprocess
 import time
@@ -13,8 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
-from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import ExtraTreesRegressor, GradientBoostingRegressor, RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV, KFold, train_test_split
 from sklearn.pipeline import Pipeline
@@ -27,12 +26,61 @@ except Exception:  # pragma: no cover - optional dependency import guard
     XGBRegressor = None
 
 from services.data_collector import FEATURE_COLUMNS
+from services.data_collector import collect_historical_data
 
 logger = logging.getLogger("aeropulse.training")
 
 MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
 BEST_MODEL_PATH = MODELS_DIR / "best_model.pkl"
 FINAL_MODEL_PATH = MODELS_DIR / "final_model.pkl"
+AUTOML_METRICS_PATH = Path(__file__).resolve().parents[1] / "ml" / "metadata" / "metrics.json"
+AUTOML_RETRAIN_SCRIPT = Path(__file__).resolve().parents[1] / "ml" / "scripts" / "retrain.py"
+
+
+def _load_automl_metrics() -> Optional[Dict[str, Any]]:
+    if not AUTOML_METRICS_PATH.exists():
+        return None
+    try:
+        return json.loads(AUTOML_METRICS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("Unable to read AutoML metrics metadata.")
+        return None
+
+
+def _automl_metrics_doc(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    values = metrics.get("metrics") or metrics
+    return {
+        "trained": True,
+        "algorithm": metrics.get("algorithm"),
+        "rmse": values.get("rmse"),
+        "mae": values.get("mae"),
+        "mse": values.get("mse"),
+        "r2": values.get("r2"),
+        "mape": values.get("mape"),
+        "explained_variance": values.get("explained_variance"),
+        "dataset_size": metrics.get("dataset_size"),
+        "model_version": metrics.get("version"),
+        "training_date": metrics.get("timestamp"),
+        "training_time_seconds": metrics.get("training_duration_seconds"),
+        "model_size_mb": metrics.get("model_size_mb"),
+        "feature_count": metrics.get("feature_count"),
+        "feature_importance": metrics.get("feature_importance", []),
+        "candidate_results": metrics.get("leaderboard", []),
+        "leaderboard": metrics.get("leaderboard", []),
+        "git_commit": metrics.get("git_commit"),
+        "promoted": True,
+        "model_path": metrics.get("best_model_path"),
+        "training_report": {
+            "dataset_size": metrics.get("dataset_size"),
+            "feature_list": metrics.get("feature_list", []),
+            "feature_importance": metrics.get("feature_importance", []),
+            "cross_validation_results": metrics.get("leaderboard", []),
+            "chosen_model": metrics.get("algorithm"),
+            "chosen_model_metrics": values,
+            "selection_reason": "Selected by AutoML leaderboard priority: highest R2, then lowest RMSE, MAE, and MAPE.",
+            "reports": metrics.get("reports", {}),
+        },
+    }
 
 
 def _git_commit() -> Optional[str]:
@@ -62,13 +110,13 @@ def _metrics(y_true, y_pred) -> Dict[str, float]:
 
 def _model_candidates(random_state: int = 42) -> Dict[str, Tuple[Pipeline, Dict[str, List[Any]]]]:
     candidates: Dict[str, Tuple[Pipeline, Dict[str, List[Any]]]] = {
-        "Linear Regression": (
-            Pipeline([("scaler", RobustScaler()), ("model", LinearRegression())]),
-            {},
-        ),
         "Random Forest": (
             Pipeline([("scaler", RobustScaler()), ("model", RandomForestRegressor(random_state=random_state, n_jobs=-1))]),
             {"model__n_estimators": [120, 220], "model__max_depth": [8, 14, None], "model__min_samples_leaf": [1, 3]},
+        ),
+        "Extra Trees": (
+            Pipeline([("scaler", RobustScaler()), ("model", ExtraTreesRegressor(random_state=random_state, n_jobs=-1))]),
+            {"model__n_estimators": [160, 260], "model__max_depth": [10, 18, None], "model__min_samples_leaf": [1, 2]},
         ),
         "Gradient Boosting": (
             Pipeline([("scaler", RobustScaler()), ("model", GradientBoostingRegressor(random_state=random_state))]),
@@ -124,6 +172,7 @@ def _prepare_frame(frame: pd.DataFrame) -> pd.DataFrame:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
     frame[FEATURE_COLUMNS] = frame[FEATURE_COLUMNS].fillna(frame[FEATURE_COLUMNS].median(numeric_only=True)).fillna(0)
     frame = frame.dropna(subset=["aqi"])
+    frame = frame[frame["aqi"].between(0, 500)]
     q_low, q_high = frame["aqi"].quantile([0.01, 0.99])
     frame = frame[(frame["aqi"] >= q_low) & (frame["aqi"] <= q_high)]
     return frame
@@ -183,16 +232,6 @@ def _train_sync(frame: pd.DataFrame) -> Dict[str, Any]:
             best = row
 
     assert best is not None
-    non_linear = [row for row in results if row["algorithm"] != "Linear Regression"]
-    if best["algorithm"] == "Linear Regression" and non_linear:
-        best_non_linear = min(non_linear, key=lambda row: row["metrics"]["rmse"])
-        if best_non_linear["metrics"]["rmse"] <= best["metrics"]["rmse"] * 1.05:
-            for name, (pipeline, grid) in _model_candidates().items():
-                if name == best_non_linear["algorithm"]:
-                    refit = GridSearchCV(pipeline, grid or {}, scoring="neg_root_mean_squared_error", cv=cv, n_jobs=1)
-                    refit.fit(X_train, y_train)
-                    best = {**best_non_linear, "estimator": refit.best_estimator_}
-                    break
     estimator: Pipeline = best["estimator"]
     raw_predictions = np.clip(estimator.predict(X_test), 0, 500)
     calibrator = IsotonicRegression(y_min=0, y_max=500, out_of_bounds="clip")
@@ -232,13 +271,29 @@ def _train_sync(frame: pd.DataFrame) -> Dict[str, Any]:
         "training_report": {
             "dataset_size": int(len(frame)),
             "feature_list": FEATURE_COLUMNS,
+            "dataset_summary": {
+                "rows": int(len(frame)),
+                "cities": int(frame["city"].nunique()) if "city" in frame else None,
+                "date_start": str(frame["timestamp"].min()) if "timestamp" in frame else None,
+                "date_end": str(frame["timestamp"].max()) if "timestamp" in frame else None,
+            },
             "target_distribution": _target_distribution(y),
             "correlation_matrix": _correlation_matrix(frame),
             "feature_importance": _feature_importance(estimator, FEATURE_COLUMNS),
             "cross_validation_results": results,
             "chosen_model": best["algorithm"],
             "chosen_model_metrics": calibrated_metrics,
-            "selection_reason": "Selected lowest validation RMSE after hyperparameter search, with isotonic calibration on validation predictions. Linear Regression is only promoted when materially better than nonlinear tree models.",
+            "prediction_examples": [
+                {"actual_aqi": round(float(actual), 2), "predicted_aqi": round(float(predicted), 2)}
+                for actual, predicted in list(zip(y_test.iloc[:20], predictions[:20]))
+            ],
+            "residual_summary": {
+                "mean": round(float(np.mean(residuals)), 4),
+                "std": round(float(np.std(residuals)), 4),
+                "p10": round(float(np.percentile(residuals, 10)), 4),
+                "p90": round(float(np.percentile(residuals, 90)), 4),
+            },
+            "selection_reason": "Selected lowest validation RMSE after identical train/test split and 5-fold cross-validation. Final outputs use isotonic calibration fitted only on validation predictions.",
         },
         "duration_seconds": round(time.time() - started, 2),
     }
@@ -313,7 +368,50 @@ async def train_production_model(db, replace_only_if_better: bool = True) -> Dic
     return metrics_doc
 
 
+async def run_full_training_pipeline(db, days: int = 365, replace_only_if_better: bool = True) -> Dict[str, Any]:
+    """Run the file-based AutoML pipeline and refresh production metadata."""
+    started = time.time()
+    process = await asyncio.create_subprocess_exec(
+        "python",
+        str(AUTOML_RETRAIN_SCRIPT),
+        cwd=str(AUTOML_RETRAIN_SCRIPT.parent),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        raise RuntimeError((stderr or stdout).decode("utf-8", errors="replace")[-4000:])
+    metrics = _load_automl_metrics() or {}
+    summary = {
+        "type": "full_pipeline",
+        "status": "completed",
+        "training": _automl_metrics_doc(metrics) if metrics else {},
+        "stdout": stdout.decode("utf-8", errors="replace")[-4000:],
+        "duration_seconds": round(time.time() - started, 2),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.training_logs.insert_one({
+        "type": "full_pipeline",
+        "status": "completed",
+        "model_version": metrics.get("version"),
+        "algorithm": metrics.get("algorithm"),
+        "training_records": metrics.get("dataset_size"),
+        "duration_seconds": summary["duration_seconds"],
+        "created_at": summary["created_at"],
+    })
+    try:
+        from model_loader_service import load_production_model
+
+        load_production_model()
+    except Exception:
+        logger.exception("Unable to reload AutoML production model after pipeline run.")
+    return summary
+
+
 async def latest_model_metrics(db) -> Dict[str, Any]:
+    automl = _load_automl_metrics()
+    if automl:
+        return _automl_metrics_doc(automl)
     doc = await db.model_metrics.find_one(sort=[("training_date", -1)])
     if not doc:
         return {"trained": False}
@@ -370,6 +468,9 @@ async def dataset_statistics(db) -> Dict[str, Any]:
 
 
 async def feature_importance(db) -> List[Dict[str, Any]]:
+    automl = _load_automl_metrics()
+    if automl:
+        return automl.get("feature_importance", [])
     doc = await db.model_metrics.find_one(sort=[("training_date", -1)])
     if not doc:
         return []
@@ -377,6 +478,17 @@ async def feature_importance(db) -> List[Dict[str, Any]]:
 
 
 async def training_report(db) -> Dict[str, Any]:
+    automl = _load_automl_metrics()
+    if automl:
+        return _automl_metrics_doc(automl).get("training_report", {}) | {
+            "trained": True,
+            "model_version": automl.get("version"),
+            "training_date": automl.get("timestamp"),
+            "algorithm": automl.get("algorithm"),
+            "rmse": automl.get("rmse"),
+            "mae": automl.get("mae"),
+            "r2": automl.get("r2"),
+        }
     doc = await db.model_metrics.find_one(sort=[("training_date", -1)])
     if not doc:
         return {"trained": False}

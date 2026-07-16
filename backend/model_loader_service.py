@@ -1,5 +1,6 @@
 """Production model loading and prediction helpers."""
 import logging
+import json
 import pickle
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,15 +14,27 @@ from aqi_utils import pollutants_to_aqi
 MODELS_DIR = Path(__file__).resolve().parent / "models"
 PRODUCTION_MODEL_PATH = MODELS_DIR / "final_model.pkl"
 BEST_MODEL_PATH = MODELS_DIR / "best_model.pkl"
+AUTOML_BEST_MODEL_PATH = Path(__file__).resolve().parent / "ml" / "models" / "best_model.pkl"
+AUTOML_METRICS_PATH = Path(__file__).resolve().parent / "ml" / "metadata" / "metrics.json"
 
 _MODEL_ARTIFACT: Optional[Dict] = None
 _MODEL_PATH: Optional[Path] = None
 logger = logging.getLogger("aeropulse.model_loader")
 
 
+def _automl_metrics() -> Dict:
+    if not AUTOML_METRICS_PATH.exists():
+        return {}
+    try:
+        return json.loads(AUTOML_METRICS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("Unable to read AutoML metrics metadata.")
+        return {}
+
+
 def load_production_model() -> Optional[Dict]:
     global _MODEL_ARTIFACT, _MODEL_PATH
-    candidates = [BEST_MODEL_PATH, PRODUCTION_MODEL_PATH]
+    candidates = [AUTOML_BEST_MODEL_PATH, BEST_MODEL_PATH, PRODUCTION_MODEL_PATH]
     candidates.extend(sorted(MODELS_DIR.glob("*.pkl"), key=lambda p: p.stat().st_mtime, reverse=True))
     for path in candidates:
         if path.exists():
@@ -37,16 +50,23 @@ def load_production_model() -> Optional[Dict]:
 def model_status() -> Dict:
     if _MODEL_ARTIFACT is None:
         return {"loaded": False, "model_path": None}
+    metrics_doc = _automl_metrics() if _MODEL_PATH == AUTOML_BEST_MODEL_PATH else {}
+    artifact_metrics = _MODEL_ARTIFACT.get("best_metrics") or _MODEL_ARTIFACT.get("metrics", {})
     return {
         "loaded": True,
         "model_path": str(_MODEL_PATH),
-        "model_name": _MODEL_ARTIFACT.get("best_name", "Production AQI Model"),
-        "model_version": _MODEL_ARTIFACT.get("model_version") or (_MODEL_PATH.stem if _MODEL_PATH else "production"),
-        "trained_at": _MODEL_ARTIFACT.get("trained_at"),
-        "metrics": _MODEL_ARTIFACT.get("best_metrics", {}),
-        "dataset_rows": _MODEL_ARTIFACT.get("dataset_rows"),
-        "feature_importance": _MODEL_ARTIFACT.get("feature_importance", []),
-        "git_commit": _MODEL_ARTIFACT.get("git_commit"),
+        "model_name": metrics_doc.get("algorithm") or _MODEL_ARTIFACT.get("algorithm") or _MODEL_ARTIFACT.get("best_name", "Production AQI Model"),
+        "algorithm": metrics_doc.get("algorithm") or _MODEL_ARTIFACT.get("algorithm") or _MODEL_ARTIFACT.get("best_name", "Production AQI Model"),
+        "model_version": metrics_doc.get("version") or _MODEL_ARTIFACT.get("model_version") or (_MODEL_PATH.stem if _MODEL_PATH else "production"),
+        "trained_at": metrics_doc.get("timestamp") or _MODEL_ARTIFACT.get("trained_at"),
+        "metrics": metrics_doc.get("metrics") or artifact_metrics,
+        "dataset_rows": metrics_doc.get("dataset_size") or _MODEL_ARTIFACT.get("dataset_rows"),
+        "feature_importance": metrics_doc.get("feature_importance") or _MODEL_ARTIFACT.get("feature_importance", []),
+        "git_commit": metrics_doc.get("git_commit") or _MODEL_ARTIFACT.get("git_commit"),
+        "model_size_mb": metrics_doc.get("model_size_mb"),
+        "feature_count": metrics_doc.get("feature_count") or len(_MODEL_ARTIFACT.get("feature_keys", [])),
+        "training_duration_seconds": metrics_doc.get("training_duration_seconds"),
+        "leaderboard": metrics_doc.get("leaderboard", []),
         "target_scale": _MODEL_ARTIFACT.get("target_scale", "0-500"),
         "aqi_standard": _MODEL_ARTIFACT.get("aqi_standard", "IN_AQI"),
     }
@@ -70,20 +90,35 @@ def _prepare_inference_features(features: Dict[str, float], means: Dict[str, flo
     prepared.setdefault("season", _season(now.month))
     prepared.setdefault("weekend", 1 if now.weekday() >= 5 else 0)
     prepared.setdefault("hour", now.hour)
+    prepared.setdefault("day_of_year", now.timetuple().tm_yday)
     prepared.setdefault("rain", 0.0)
     prepared.setdefault("clouds", means.get("clouds", 0.0))
     prepared.setdefault("visibility", means.get("visibility", 10000.0))
-    for key in ("temp", "humidity", "wind"):
+    prepared.setdefault("wind_category", 0 if float(prepared.get("wind") or means.get("wind", 0) or 0) <= 2 else 1)
+    prepared.setdefault("rain_indicator", 1 if float(prepared.get("rain") or 0) > 0 else 0)
+    for key in ("temp", "humidity", "pressure", "wind"):
         prepared.setdefault(f"{key}_change" if key == "temp" else f"{key}_trend", 0.0)
     pm25 = float(prepared.get("pm25") or means.get("pm25", 0.0) or 0.0)
     pm10 = float(prepared.get("pm10") or means.get("pm10", 0.0) or 0.0)
-    current_aqi_estimate = pollutants_to_aqi(prepared, standard="IN_AQI")
-    prepared.setdefault("rolling_pm_average", pm25)
-    prepared.setdefault("rolling_aqi_average", current_aqi_estimate)
+    no2 = float(prepared.get("no2") or means.get("no2", 0.0) or 0.0)
+    o3 = float(prepared.get("o3") or means.get("o3", 0.0) or 0.0)
+    humidity = float(prepared.get("humidity") or means.get("humidity", 0.0) or 0.0)
+    temp = float(prepared.get("temp") or means.get("temp", 0.0) or 0.0)
+    wind = float(prepared.get("wind") or means.get("wind", 0.0) or 0.0)
+    for key, value in {"pm25_lag_1": pm25, "pm10_lag_1": pm10, "no2_lag_1": no2, "o3_lag_1": o3}.items():
+        prepared.setdefault(key, value)
+    for key, value in {"pm25_rolling_24h": pm25, "pm10_rolling_24h": pm10, "no2_rolling_24h": no2, "o3_rolling_24h": o3}.items():
+        prepared.setdefault(key, value)
+    prepared.setdefault("rolling_pm_average", np.mean([pm25, pm10]))
     prepared.setdefault("moving_pollutant_average", np.mean([
         float(prepared.get(key) or means.get(key, 0.0) or 0.0)
         for key in ("pm25", "pm10", "no2", "so2", "co", "o3")
     ]))
+    prepared.setdefault("pm25_pm10_ratio", pm25 / max(pm10, 1e-6))
+    prepared.setdefault("no2_o3_ratio", no2 / max(o3, 1e-6))
+    prepared.setdefault("pm25_humidity_interaction", pm25 * humidity / 100)
+    prepared.setdefault("pm10_wind_interaction", pm10 / (wind + 1))
+    prepared.setdefault("o3_temp_interaction", o3 * temp)
     prepared["pm25"] = pm25
     prepared["pm10"] = pm10
     return prepared
@@ -125,7 +160,7 @@ def predict_with_production_model(features: Dict[str, float]) -> Dict:
         prediction,
         warnings,
     )
-    metrics = _MODEL_ARTIFACT.get("best_metrics", {})
+    metrics = _MODEL_ARTIFACT.get("best_metrics") or _MODEL_ARTIFACT.get("metrics", {})
     r2_confidence = max(0.0, min(1.0, float(metrics.get("r2", 0.0))))
     z_scores = [
         abs(float(frame.iloc[0][key]) - float(means.get(key, 0.0))) / max(float(stds.get(key, 1.0)), 1e-6)
@@ -140,15 +175,15 @@ def predict_with_production_model(features: Dict[str, float]) -> Dict:
         "final_aqi": round(prediction, 3),
         "expected_aqi_range": "0-500",
         "warnings": warnings,
-        "model": _MODEL_ARTIFACT.get("best_name", "Production AQI Model"),
+        "model": _MODEL_ARTIFACT.get("algorithm") or _MODEL_ARTIFACT.get("best_name", "Production AQI Model"),
         "features_used": keys,
         "processed_features": {key: processed.get(key) for key in keys},
         "confidence": round(confidence * 100, 1),
         "metrics": metrics,
         "model_version": model_status().get("model_version"),
-        "trained_at": _MODEL_ARTIFACT.get("trained_at"),
+        "trained_at": model_status().get("trained_at") or _MODEL_ARTIFACT.get("trained_at"),
         "dataset_rows": _MODEL_ARTIFACT.get("dataset_rows"),
-        "feature_importance": _MODEL_ARTIFACT.get("feature_importance", []),
+        "feature_importance": model_status().get("feature_importance") or _MODEL_ARTIFACT.get("feature_importance", []),
         "feature_contributions": _feature_contributions(processed, keys, means),
     }
 
